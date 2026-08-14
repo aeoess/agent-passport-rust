@@ -1,0 +1,36 @@
+RUNTIME|node v24.11.1
+ROW|scope-control|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scope-absent|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scope-null|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scope-empty-array|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scope-mixed-type|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scope-string|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scope-object|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scope-bool|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scope-null-element|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|scopeAuthorizes-mixed-match-first|primitive|ACCEPT|returned true without touching the non-string element (some() short-circuits)
+ROW|scopeAuthorizes-mixed-reach-nonstring|primitive|THROW|TypeError: granted.endsWith is not a function
+ROW|scopeAuthorizes-null-element-match-first|primitive|ACCEPT|returned true
+ROW|scopeAuthorizes-null-element-reached|primitive|THROW|TypeError: Cannot read properties of null (reading 'endsWith')
+ROW|depth-current-absent|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-null|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-0|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-positive|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-negative|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-fractional|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-exponent|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-string|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-bool|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-current-beyond-i64|verifier|REJECT|valid=false depthExceeded=true errors=["Depth limit exceeded"]
+ROW|depth-max-absent|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-max-null|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-max-0|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-max-negative|verifier|REJECT|valid=false depthExceeded=true errors=["Depth limit exceeded"]
+ROW|depth-max-fractional|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-max-string|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-max-bool|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|depth-max-beyond-i64|verifier|ACCEPT|valid=true depthExceeded=false errors=[]
+ROW|chain-validateChain|chain|NO-PATH|Error: This function has moved to DelegationStore in @aeoess/gateway. Instantiate a DelegationStore and call the corresponding method. See MIGRATION.md#delegati
+ROW|smallorder-verify|verifier|ACCEPT|SDK verify() on the degenerate identity-point vector
+ROW|smallorder-message-independent|verifier|ACCEPT|same vector, different message
+ROW|smallorder-verifyDelegation|verifier|ACCEPT|full delegation path: valid=true errors=[]

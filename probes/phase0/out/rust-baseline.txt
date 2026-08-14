@@ -1,0 +1,26 @@
+   Compiling agent-passport v0.1.0 (/Users/tima/agent-passport-rust)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
+     Running tests/wave11_baseline_probe.rs (target/debug/deps/wave11_baseline_probe-1fa8817aefb0b1a6)
+
+running 3 tests
+test baseline_matrix_rows ... ROW|scope-child-mixed-type|baseline|ACCEPT|42 silently discarded
+ROW|scope-child-mixed-widening|baseline|REJECT|ScopeWidening { hop: 1 } (only the string element was examined)
+ROW|scope-single-link-mixed|baseline|ACCEPT|single link never examined
+ROW|scope-child-string|baseline|ACCEPT|non-array scope treated as empty
+ROW|depth-fractional-negative-chain|baseline|ACCEPT|-1.5 -> -0.5 satisfies +1
+ROW|depth-child-string|baseline|ACCEPT|string depth treated as absent (0)
+ROW|depth-child-exponent|baseline|ACCEPT|1e0 read as 1.0
+ROW|depth-negative-chain|baseline|ACCEPT|negative integral chain
+ROW|serde-minus-zero|baseline|INFO|is_i64=false is_f64=true as_f64=Some(-0.0) sign_negative=Some(true)
+ROW|serde-minus-zero-fractional|baseline|INFO|is_i64=false is_f64=true sign_negative=Some(true)
+ROW|serde-exponent|baseline|INFO|is_i64=false is_f64=true
+ROW|serde-plain-integer|baseline|INFO|is_i64=true is_f64=false
+ok
+test item4_corrected_duplicate_alias_test_at_baseline ... ROW|item4-escaped-alias-duplicate|baseline|REJECT-DuplicateMember|Err(DuplicateMember)
+ok
+test item5_rust_rows ... ROW|smallorder-rust-verify_ed25519|baseline|ACCEPT|crate public path
+ROW|smallorder-dalek-verify_strict|baseline|REJECT|ed25519_dalek::VerifyingKey::verify_strict directly
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,45 @@
+RUNTIME|go1.26.3
+ROW|scope-child-control|verifier|ACCEPT|chain valid
+ROW|scope-child-absent|verifier|ACCEPT|chain valid
+ROW|scope-child-null|verifier|ACCEPT|chain valid
+ROW|scope-child-empty-array|verifier|ACCEPT|chain valid
+ROW|scope-child-mixed-type|deserialization|REJECT|json: cannot unmarshal number into Go struct field Delegation.scope of type string
+ROW|scope-child-string|deserialization|REJECT|json: cannot unmarshal string into Go struct field Delegation.scope of type []string
+ROW|scope-child-object|deserialization|REJECT|json: cannot unmarshal object into Go struct field Delegation.scope of type []string
+ROW|scope-child-bool|deserialization|REJECT|json: cannot unmarshal bool into Go struct field Delegation.scope of type []string
+ROW|scope-parent-absent|verifier|REJECT|scope widening: child scope not covered by parent
+ROW|scope-parent-null|verifier|REJECT|scope widening: child scope not covered by parent
+ROW|scope-parent-empty-array|verifier|REJECT|scope widening: child scope not covered by parent
+ROW|scope-parent-mixed-type|deserialization|REJECT|json: cannot unmarshal number into Go struct field Delegation.scope of type string
+ROW|scope-child-null-element|verifier|REJECT|scope widening: child scope not covered by parent
+ROW|scope-child-null-element-star-parent|verifier|ACCEPT|chain valid
+ROW|scope-child-empty-string-element|verifier|REJECT|scope widening: child scope not covered by parent
+ROW|scope-child-empty-string-element-star-parent|verifier|ACCEPT|chain valid
+ROW|scope-child-array-element|deserialization|REJECT|json: cannot unmarshal array into Go struct field Delegation.scope of type string
+ROW|scope-single-link-mixed|deserialization|REJECT|json: cannot unmarshal number into Go struct field Delegation.scope of type string
+ROW|depth-control|verifier|ACCEPT|chain valid
+ROW|depth-child-absent-parent-0|verifier|REJECT|depth not monotonic: child.currentDepth must be parent.currentDepth + 1
+ROW|depth-child-absent-parent-minus1|verifier|ACCEPT|chain valid
+ROW|depth-child-null-parent-minus1|verifier|ACCEPT|chain valid
+ROW|depth-negative-chain|verifier|ACCEPT|chain valid
+ROW|depth-child-fractional|deserialization|REJECT|json: cannot unmarshal number 1.5 into Go struct field Delegation.currentDepth of type int
+ROW|depth-fractional-negative-chain|deserialization|REJECT|json: cannot unmarshal number -1.5 into Go struct field Delegation.currentDepth of type int
+ROW|depth-child-exponent|deserialization|REJECT|json: cannot unmarshal number 1e0 into Go struct field Delegation.currentDepth of type int
+ROW|depth-child-string|deserialization|REJECT|json: cannot unmarshal string into Go struct field Delegation.currentDepth of type int
+ROW|depth-child-bool|deserialization|REJECT|json: cannot unmarshal bool into Go struct field Delegation.currentDepth of type int
+ROW|depth-child-beyond-i64|deserialization|REJECT|json: cannot unmarshal number 9223372036854775808 into Go struct field Delegation.currentDepth of type int
+ROW|depth-child-minus-zero|verifier|ACCEPT|chain valid
+ROW|depth-child-minus-zero-fractional|deserialization|REJECT|json: cannot unmarshal number -0.0 into Go struct field Delegation.currentDepth of type int
+ROW|maxdepth-absent|verifier|ACCEPT|chain valid
+ROW|maxdepth-null|verifier|ACCEPT|chain valid
+ROW|maxdepth-1|verifier|ACCEPT|chain valid
+ROW|maxdepth-0|verifier|REJECT|depth limit exceeded
+ROW|maxdepth-negative|verifier|REJECT|depth limit exceeded
+ROW|maxdepth-fractional|deserialization|REJECT|json: cannot unmarshal number 1.5 into Go struct field Delegation.maxDepth of type int
+ROW|maxdepth-exponent|deserialization|REJECT|json: cannot unmarshal number 1e0 into Go struct field Delegation.maxDepth of type int
+ROW|maxdepth-string|deserialization|REJECT|json: cannot unmarshal string into Go struct field Delegation.maxDepth of type int
+ROW|maxdepth-bool|deserialization|REJECT|json: cannot unmarshal bool into Go struct field Delegation.maxDepth of type int
+ROW|maxdepth-beyond-i64|deserialization|REJECT|json: cannot unmarshal number 9223372036854775808 into Go struct field Delegation.maxDepth of type int
+ROW|smallorder-VerifyEd25519|verifier|ACCEPT|degenerate identity-point vector verifies
+ROW|smallorder-VerifyCanonicalSignature|verifier|ACCEPT|full canonical-signature path verifies
+ROW|smallorder-message-independent|verifier|ACCEPT|verifies for any message
