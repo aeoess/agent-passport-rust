@@ -35,5 +35,8 @@
 
 pub mod action_ref;
 pub mod crypto;
+pub mod delegation;
 pub mod jcs;
 pub mod legacy_canonical;
+pub mod passport;
+pub mod receipt_core;
