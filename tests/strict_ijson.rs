@@ -78,15 +78,43 @@ fn rejects_lone_surrogate_escapes_and_accepts_pairs() {
 
 #[test]
 fn rejects_duplicate_members_after_escape_decoding() {
+    // Literal duplicate.
     assert_eq!(
         parse_strict_ijson_default(br#"{"a":1,"a":2}"#),
         Err(IJsonError::DuplicateMember)
     );
-    // "a" decodes to "a": the alias is the same member name.
+    // Escape-alias duplicate: the second member name is the u0061 escape
+    // of "a". The wave 1 form of this case had silently degraded to the
+    // literal duplicate above (the escape was lost when the file was
+    // written), so the input is now assembled with an explicit 0x5C
+    // backslash byte and the bytes are asserted to physically carry the
+    // escape sequence: this test cannot degrade to the vacuous form again.
+    let mut raw: Vec<u8> = Vec::new();
+    raw.extend_from_slice(br#"{"a":1,""#);
+    raw.push(0x5C);
+    raw.extend_from_slice(b"u0061");
+    raw.extend_from_slice(br#"":2}"#);
+    let escape: [u8; 6] = [0x5C, b'u', b'0', b'0', b'6', b'1'];
+    assert!(
+        raw.windows(escape.len()).any(|window| window == escape),
+        "input bytes must physically contain the escape sequence"
+    );
+    // The rejection is specifically DuplicateMember, never some other
+    // parser error: the escape decodes to the same member name "a".
     assert_eq!(
-        parse_strict_ijson_default(br#"{"a":1,"a":2}"#),
+        parse_strict_ijson_default(&raw),
         Err(IJsonError::DuplicateMember)
     );
+    // Control: the identical escape construction under a distinct first
+    // member name parses cleanly, so the escape itself is not what
+    // rejects, and it decodes to the member name "a".
+    let mut distinct: Vec<u8> = Vec::new();
+    distinct.extend_from_slice(br#"{"b":1,""#);
+    distinct.push(0x5C);
+    distinct.extend_from_slice(b"u0061");
+    distinct.extend_from_slice(br#"":2}"#);
+    let parsed = parse_strict_ijson_default(&distinct).unwrap();
+    assert_eq!(parsed.as_object().unwrap()["a"], json!(2));
 }
 
 #[test]
