@@ -155,3 +155,51 @@ fn invalid_point_encoding_rejects() {
     let not_a_point = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
     assert!(!verify_ed25519(&message, &signature, not_a_point));
 }
+
+#[test]
+fn small_order_boundary_pins_verify_over_verify_strict() {
+    // Wave 1.1 item 5. Deterministic small order vector: the public key is
+    // the canonical encoding of the Edwards identity point (order 1), the
+    // signature is R = the same encoding with S = 0, so the RFC 8032
+    // equation [S]B = R + [k]A degenerates to identity = identity for
+    // every message. Observed through the complete pinned reference paths
+    // (probes/phase0/MATRIX.md): the TypeScript SDK verify() and full
+    // verifyDelegation (Node v24.11.1) ACCEPT, the Go VerifyEd25519 and
+    // full VerifyCanonicalSignature (go1.26.3) ACCEPT. This test pins the
+    // Rust halves of that four-way matrix: the crate's plain-verify path
+    // agrees with both references, and dalek's verify_strict alone
+    // differs, which is exactly the wave 1 ground for choosing verify.
+    use ed25519_dalek::{Signature, VerifyingKey};
+
+    let small_order_public = format!("01{}", "00".repeat(31));
+    let small_order_signature = format!("01{}{}", "00".repeat(31), "00".repeat(32));
+    let message = b"APS wave1.1 small order probe";
+
+    assert!(
+        verify_ed25519(message, &small_order_signature, &small_order_public),
+        "plain verify accepts the small order vector, as Node and Go do"
+    );
+    assert!(
+        verify_ed25519(
+            b"a completely different message",
+            &small_order_signature,
+            &small_order_public
+        ),
+        "the degenerate vector is message independent"
+    );
+
+    let key_bytes: [u8; 32] = hex::decode(&small_order_public)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let signature_bytes: [u8; 64] = hex::decode(&small_order_signature)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let key = VerifyingKey::from_bytes(&key_bytes).unwrap();
+    let signature = Signature::from_bytes(&signature_bytes);
+    assert!(
+        key.verify_strict(message, &signature).is_err(),
+        "verify_strict rejects the same vector: the one path that differs"
+    );
+}
