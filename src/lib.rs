@@ -32,3 +32,6 @@
 //!   structural-only status.
 //! - Error messages never contain signed payload contents, keys, or
 //!   signatures.
+
+pub mod jcs;
+pub mod legacy_canonical;
