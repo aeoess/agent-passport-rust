@@ -228,6 +228,15 @@ pub enum ChainError {
         /// Index of the child link.
         hop: usize,
     },
+    /// A present `currentDepth` or `maxDepth` is not an integral JSON
+    /// number representable in i64. The Go reference rejects these at
+    /// deserialization (`*int`); at baseline a fractional chain such as
+    /// -1.5 followed by -0.5 satisfied the +1 rule through f64 arithmetic.
+    #[error("depth is not an integer at hop {hop}")]
+    DepthNotAnInteger {
+        /// Index of the offending link.
+        hop: usize,
+    },
     /// The child's depth exceeds the parent's `maxDepth`.
     #[error("depth limit exceeded at hop {hop}")]
     DepthLimitExceeded {
@@ -320,8 +329,31 @@ fn scopes_of(link: &Value) -> Result<Vec<String>, ()> {
     }
 }
 
-fn depth_of(link: &Value, key: &str) -> Option<f64> {
-    link.get(key).and_then(Value::as_f64)
+/// Checked depth extraction, the only place chain code reads `currentDepth`
+/// or `maxDepth`.
+///
+/// Absent and null are the Go nil default (no value). A present depth must
+/// be an integral JSON number representable in i64, the domain the Go
+/// reference accepts at deserialization (`*int`), with one observed corner:
+/// the literal `-0`, which Go accepts as 0 and serde_json parses to the
+/// IEEE double -0.0. Negative integers stay accepted (Go verifies chains at
+/// negative depths). Fractional, exponent-form, string, boolean, and
+/// out-of-range values are an error.
+fn depth_of(link: &Value, key: &str) -> Result<Option<i64>, ()> {
+    match link.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => {
+            if let Some(depth) = number.as_i64() {
+                Ok(Some(depth))
+            } else {
+                match number.as_f64() {
+                    Some(double) if double == 0.0 && double.is_sign_negative() => Ok(Some(0)),
+                    _ => Err(()),
+                }
+            }
+        }
+        Some(_) => Err(()),
+    }
 }
 
 /// Structural narrowing verification of a root-to-leaf chain, ported from
@@ -338,11 +370,14 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
         if !link.is_object() {
             return Err(ChainError::NotAnObject { hop: index });
         }
-        // Scope element types gate the whole chain up front, matching the
-        // Go reference where deserialization of ANY link (including a
-        // single-link chain with no pairwise step) fails before the
-        // verifier runs.
+        // Scope element and depth types gate the whole chain up front,
+        // matching the Go reference where deserialization of ANY link
+        // (including a single-link chain with no pairwise step) fails
+        // before the verifier runs.
         scopes_of(link).map_err(|()| ChainError::ScopeElementNotAString { hop: index })?;
+        depth_of(link, "currentDepth")
+            .map_err(|()| ChainError::DepthNotAnInteger { hop: index })?;
+        depth_of(link, "maxDepth").map_err(|()| ChainError::DepthNotAnInteger { hop: index })?;
     }
     for hop in 1..chain.len() {
         let parent = &chain[hop - 1];
@@ -350,12 +385,22 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
         if str_field(child, "delegatedBy") != str_field(parent, "delegatedTo") {
             return Err(ChainError::BrokenLinkage { hop });
         }
-        let parent_depth = depth_of(parent, "currentDepth").unwrap_or(0.0);
-        let child_depth = depth_of(child, "currentDepth").unwrap_or(0.0);
-        if child_depth != parent_depth + 1.0 {
-            return Err(ChainError::DepthNotMonotonic { hop });
+        let parent_depth = depth_of(parent, "currentDepth")
+            .map_err(|()| ChainError::DepthNotAnInteger { hop: hop - 1 })?
+            .unwrap_or(0);
+        let child_depth = depth_of(child, "currentDepth")
+            .map_err(|()| ChainError::DepthNotAnInteger { hop })?
+            .unwrap_or(0);
+        match parent_depth.checked_add(1) {
+            Some(expected) if child_depth == expected => {}
+            // A parent depth of exactly i64::MAX has no +1 child. Go's int
+            // wraps here and can accept; the checked form keeps the
+            // baseline rejection (recorded in the phase 0 matrix).
+            _ => return Err(ChainError::DepthNotMonotonic { hop }),
         }
-        if let Some(max_depth) = depth_of(parent, "maxDepth") {
+        if let Some(max_depth) = depth_of(parent, "maxDepth")
+            .map_err(|()| ChainError::DepthNotAnInteger { hop: hop - 1 })?
+        {
             if child_depth > max_depth {
                 return Err(ChainError::DepthLimitExceeded { hop });
             }

@@ -499,6 +499,147 @@ fn chain_null_scope_element_is_the_inert_empty_string() {
     assert_eq!(verify_chain_structure(&covered), Ok(()));
 }
 
+// --- wave 1.1 item 2: depth value domain (phase 0 matrix, Go parity) ---
+
+#[test]
+fn chain_refuses_non_integral_depths() {
+    // The defect case: at baseline -1.5 followed by -0.5 satisfied the +1
+    // rule through f64 arithmetic. The parent's fractional depth is caught
+    // by the up-front per-link gate at index 0.
+    let fractional = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":-1.5},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":-0.5}
+        ]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&fractional),
+        Err(ChainError::DepthNotAnInteger { hop: 0 })
+    );
+    // Every non-integral class Go rejects at deserialization, on the child.
+    for child_depth in ["1.5", "1e0", "\"1\"", "true", "9223372036854775808"] {
+        let chain = chain_doc(&format!(
+            r#"[
+            {{"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":0}},
+            {{"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":{child_depth}}}
+            ]"#,
+        ));
+        assert_eq!(
+            verify_chain_structure(&chain),
+            Err(ChainError::DepthNotAnInteger { hop: 1 }),
+            "currentDepth {child_depth}"
+        );
+    }
+    // maxDepth shares the domain.
+    for max_depth in ["1.5", "1e0", "\"1\"", "true", "9223372036854775808"] {
+        let chain = chain_doc(&format!(
+            r#"[
+            {{"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":0,"maxDepth":{max_depth}}},
+            {{"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":1}}
+            ]"#,
+        ));
+        assert_eq!(
+            verify_chain_structure(&chain),
+            Err(ChainError::DepthNotAnInteger { hop: 0 }),
+            "maxDepth {max_depth}"
+        );
+    }
+}
+
+#[test]
+fn chain_depth_accepted_states_are_preserved() {
+    // Null and absent stay the Go nil default (0); negative integral
+    // chains stay accepted; the literal -0 is accepted as 0 (Go parses it
+    // to 0); a negative maxDepth stays a value-domain rejection at the
+    // verifier layer, not a type error.
+    let null_child = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":-1},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":null}
+        ]"#,
+    );
+    assert_eq!(verify_chain_structure(&null_child), Ok(()));
+    let negative = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":-2},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":-1}
+        ]"#,
+    );
+    assert_eq!(verify_chain_structure(&negative), Ok(()));
+    let minus_zero = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":-1},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":-0}
+        ]"#,
+    );
+    assert_eq!(verify_chain_structure(&minus_zero), Ok(()));
+    // An absent child depth under a parent at 0 is still the monotonicity
+    // rejection, exactly as Go refuses it (default 0 is not 0 + 1).
+    let absent_child = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":0},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"]}
+        ]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&absent_child),
+        Err(ChainError::DepthNotMonotonic { hop: 1 })
+    );
+    let negative_bound = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":0,"maxDepth":-1},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":1}
+        ]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&negative_bound),
+        Err(ChainError::DepthLimitExceeded { hop: 1 })
+    );
+    // A parent at exactly i64::MAX has no +1 child: the checked add keeps
+    // the baseline rejection (Go's int wraps here; recorded divergence).
+    let saturated = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":9223372036854775807},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":-9223372036854775808}
+        ]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&saturated),
+        Err(ChainError::DepthNotMonotonic { hop: 1 })
+    );
+}
+
+#[test]
+fn single_delegation_depth_stays_dynamic() {
+    // verify_delegation is the TS-referenced path: the phase 0 matrix
+    // records TS accepting fractional depths there (plain > comparison),
+    // so the chain-path integral domain must NOT leak into it.
+    let fractional_live = signed_delegation(
+        "delegation-root-key",
+        json!({
+            "delegatedTo": "agent-b",
+            "scope": ["x"],
+            "expiresAt": "2027-01-01T00:00:00Z",
+            "maxDepth": 3,
+            "currentDepth": 1.5
+        }),
+    );
+    let status = verify_delegation(&fractional_live, NOW).unwrap();
+    assert!(status.valid, "{status:?}");
+    let fractional_deep = signed_delegation(
+        "delegation-root-key",
+        json!({
+            "delegatedTo": "agent-b",
+            "scope": ["x"],
+            "expiresAt": "2027-01-01T00:00:00Z",
+            "maxDepth": 2,
+            "currentDepth": 2.5
+        }),
+    );
+    let status = verify_delegation(&fractional_deep, NOW).unwrap();
+    assert!(status.depth_exceeded);
+}
+
 #[test]
 fn chain_authorization_routes_through_checked_scope_extraction() {
     // The authorization path reports the typed scope error, not a
