@@ -240,6 +240,17 @@ pub enum ChainError {
         /// Index of the child link.
         hop: usize,
     },
+    /// A scope array carries a non-string, non-null element. The Go
+    /// reference rejects this at deserialization (`Scope []string`) for
+    /// every link of the chain; a verifier must never silently discard a
+    /// scope member. A null element is not this error: Go's decoder leaves
+    /// it at the string zero value, so it is kept as the inert empty
+    /// string.
+    #[error("scope element is not a string at hop {hop}")]
+    ScopeElementNotAString {
+        /// Index of the offending link.
+        hop: usize,
+    },
     /// The child's spend limit exceeds the parent's.
     #[error("spend limit widening at hop {hop}")]
     SpendLimitWidening {
@@ -286,17 +297,27 @@ fn str_field<'a>(link: &'a Value, key: &str) -> &'a str {
     link.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-fn scopes_of(link: &Value) -> Vec<String> {
-    link.get("scope")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+/// Checked scope extraction, the only place chain code reads `scope`.
+///
+/// An absent, null, or non-array `scope` member yields an empty list (the
+/// Go reference accepts absent and null as a nil slice; the non-array case
+/// is recorded in the phase 0 matrix as an instruction-limited leniency). A
+/// scope ARRAY is extracted element by element: strings are kept, a JSON
+/// null element becomes the inert empty string exactly as Go's decoder
+/// leaves it, and any other element type is an error, never a silent
+/// discard.
+fn scopes_of(link: &Value) -> Result<Vec<String>, ()> {
+    match link.get("scope") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| match item {
+                Value::String(scope) => Ok(scope.clone()),
+                Value::Null => Ok(String::new()),
+                _ => Err(()),
+            })
+            .collect(),
+        _ => Ok(Vec::new()),
+    }
 }
 
 fn depth_of(link: &Value, key: &str) -> Option<f64> {
@@ -317,6 +338,11 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
         if !link.is_object() {
             return Err(ChainError::NotAnObject { hop: index });
         }
+        // Scope element types gate the whole chain up front, matching the
+        // Go reference where deserialization of ANY link (including a
+        // single-link chain with no pairwise step) fails before the
+        // verifier runs.
+        scopes_of(link).map_err(|()| ChainError::ScopeElementNotAString { hop: index })?;
     }
     for hop in 1..chain.len() {
         let parent = &chain[hop - 1];
@@ -334,8 +360,9 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
                 return Err(ChainError::DepthLimitExceeded { hop });
             }
         }
-        let parent_scope = scopes_of(parent);
-        for scope in scopes_of(child) {
+        let parent_scope =
+            scopes_of(parent).map_err(|()| ChainError::ScopeElementNotAString { hop: hop - 1 })?;
+        for scope in scopes_of(child).map_err(|()| ChainError::ScopeElementNotAString { hop })? {
             if !scope_authorizes(&parent_scope, &scope) {
                 return Err(ChainError::ScopeWidening { hop });
             }

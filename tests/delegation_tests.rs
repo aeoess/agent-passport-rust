@@ -394,6 +394,129 @@ fn authorization_rejects_bad_signature_and_inactive_hop() {
     assert!(verify_chain_authorization(&chain, &trusted, "junk").is_err());
 }
 
+// --- wave 1.1 item 1: scope element type (phase 0 matrix, Go parity) ---
+
+fn chain_doc(doc: &str) -> Vec<Value> {
+    serde_json::from_str(doc).expect("probe chain document parses")
+}
+
+#[test]
+fn chain_refuses_non_string_scope_element() {
+    // The defect case: at baseline the 42 was silently discarded and the
+    // remaining string was covered, so the chain verified. The specific
+    // variant is asserted so a signature failure can never mask this.
+    let chain = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read","x"],"currentDepth":0},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read",42],"currentDepth":1}
+        ]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&chain),
+        Err(ChainError::ScopeElementNotAString { hop: 1 })
+    );
+}
+
+#[test]
+fn chain_refuses_mixed_scope_on_any_link() {
+    // Go's deserialization gate covers every link, including a single-link
+    // chain that has no pairwise narrowing step, and a parent link.
+    let single = chain_doc(
+        r#"[{"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read",42],"currentDepth":0}]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&single),
+        Err(ChainError::ScopeElementNotAString { hop: 0 })
+    );
+    let parent_mixed = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read",true],"currentDepth":0},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":1}
+        ]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&parent_mixed),
+        Err(ChainError::ScopeElementNotAString { hop: 0 })
+    );
+    let object_element = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read","x"],"currentDepth":0},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read",["x"]],"currentDepth":1}
+        ]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&object_element),
+        Err(ChainError::ScopeElementNotAString { hop: 1 })
+    );
+}
+
+#[test]
+fn chain_scope_member_leniency_is_preserved() {
+    // Accepted states from the phase 0 matrix stay accepted: absent, null,
+    // and [] child scope (Go: nil slice, vacuous narrowing pass), and the
+    // instruction-limited non-array leniency.
+    for child_scope_member in [
+        r#""currentDepth":1"#,
+        r#""scope":null,"currentDepth":1"#,
+        r#""scope":[],"currentDepth":1"#,
+        r#""scope":"read","currentDepth":1"#,
+    ] {
+        let chain = chain_doc(&format!(
+            r#"[
+            {{"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read","x"],"currentDepth":0}},
+            {{"delegatedBy":"agent-a","delegatedTo":"agent-b",{child_scope_member}}}
+            ]"#,
+        ));
+        assert_eq!(
+            verify_chain_structure(&chain),
+            Ok(()),
+            "{child_scope_member}"
+        );
+    }
+}
+
+#[test]
+fn chain_null_scope_element_is_the_inert_empty_string() {
+    // Go's decoder leaves a null string element at the zero value "", so
+    // the member survives (it is not discarded) and must itself be covered
+    // by the parent: widening under a non-covering parent, valid under "*".
+    let widened = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read","x"],"currentDepth":0},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read",null],"currentDepth":1}
+        ]"#,
+    );
+    assert_eq!(
+        verify_chain_structure(&widened),
+        Err(ChainError::ScopeWidening { hop: 1 })
+    );
+    let covered = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["*"],"currentDepth":0},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read",null],"currentDepth":1}
+        ]"#,
+    );
+    assert_eq!(verify_chain_structure(&covered), Ok(()));
+}
+
+#[test]
+fn chain_authorization_routes_through_checked_scope_extraction() {
+    // The authorization path reports the typed scope error, not a
+    // signature or trust failure: the links are unsigned, but the root is
+    // trusted and the structural gate runs before signature checks.
+    let chain = chain_doc(
+        r#"[
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read","x"],"currentDepth":0},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read",42],"currentDepth":1}
+        ]"#,
+    );
+    let trusted = vec!["root-key".to_string()];
+    assert_eq!(
+        verify_chain_authorization(&chain, &trusted, NOW).unwrap(),
+        Err(ChainError::ScopeElementNotAString { hop: 1 })
+    );
+}
+
 #[test]
 fn structural_pass_is_not_authorization() {
     // The same chain that passes the structural check still refuses
