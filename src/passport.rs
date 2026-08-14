@@ -106,8 +106,28 @@ pub struct PassportVerifyOptions<'a> {
     /// Uniform clock skew in milliseconds, applied exactly as the
     /// reference's `allowedClockSkewMs`: expiry tolerated within `now - skew`
     /// and `not_before` honored within `now + skew`. Zero reproduces the
-    /// exact-boundary behavior.
-    pub allowed_clock_skew_ms: i64,
+    /// exact-boundary behavior. Unsigned by construction, so a negative
+    /// allowance cannot exist; a skew whose application would leave the i64
+    /// millisecond domain is the typed
+    /// [`PassportInputError::SkewArithmetic`], never a wrap or a panic.
+    /// This unsigned domain is a deliberate Rust-side restriction of the
+    /// verifier OPTIONS API only; it does not change how any signed
+    /// artifact is interpreted.
+    pub allowed_clock_skew_ms: u64,
+}
+
+/// Input-domain failure of [`verify_passport`]: the verifier options could
+/// not be applied. Distinct from findings about the passport itself, which
+/// are always reported inside [`PassportVerification`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PassportInputError {
+    /// `evaluation_time` is not a valid RFC 3339 timestamp.
+    #[error("evaluation time is not a valid RFC 3339 timestamp")]
+    InvalidEvaluationTime,
+    /// `allowed_clock_skew_ms` cannot be applied to the evaluation time
+    /// without leaving the i64 millisecond domain.
+    #[error("allowed clock skew cannot be applied to the evaluation time")]
+    SkewArithmetic,
 }
 
 fn parse_ms(ts: &str) -> Option<i64> {
@@ -169,14 +189,27 @@ pub fn verify_issuer_signature(signed: &Value, issuer_public_key: &str) -> bool 
 /// and not-before boundaries, required identity fields, and embedded
 /// delegation observations (warnings only).
 ///
-/// Returns an error only when `evaluation_time` itself cannot be parsed;
-/// every finding about the passport is reported in the result.
+/// Returns an error only when the verifier inputs are unusable: an
+/// unparseable `evaluation_time`, or a skew that cannot be applied within
+/// the i64 millisecond domain. Every finding about the passport itself is
+/// reported in the result.
 pub fn verify_passport(
     signed: &Value,
     options: &PassportVerifyOptions<'_>,
-) -> Result<PassportVerification, legacy_canonical::TimestampError> {
-    let now_ms = parse_ms(options.evaluation_time).ok_or(legacy_canonical::TimestampError)?;
-    let skew = options.allowed_clock_skew_ms;
+) -> Result<PassportVerification, PassportInputError> {
+    let now_ms =
+        parse_ms(options.evaluation_time).ok_or(PassportInputError::InvalidEvaluationTime)?;
+    // Checked conversion and checked boundary arithmetic: the skew is
+    // unsigned, so only overflow past the i64 domain can fail, and it fails
+    // as a typed error before any verdict is formed.
+    let skew = i64::try_from(options.allowed_clock_skew_ms)
+        .map_err(|_| PassportInputError::SkewArithmetic)?;
+    let expiry_floor = now_ms
+        .checked_sub(skew)
+        .ok_or(PassportInputError::SkewArithmetic)?;
+    let not_before_ceiling = now_ms
+        .checked_add(skew)
+        .ok_or(PassportInputError::SkewArithmetic)?;
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
@@ -251,7 +284,7 @@ pub fn verify_passport(
         .and_then(Value::as_str)
         .and_then(parse_ms)
     {
-        if expiry_ms < now_ms - skew {
+        if expiry_ms < expiry_floor {
             errors.push(PassportError::Expired);
         }
     }
@@ -260,7 +293,7 @@ pub fn verify_passport(
         .and_then(Value::as_str)
         .and_then(parse_ms)
     {
-        if nbf_ms > now_ms + skew {
+        if nbf_ms > not_before_ceiling {
             errors.push(PassportError::NotYetValid);
         }
     }

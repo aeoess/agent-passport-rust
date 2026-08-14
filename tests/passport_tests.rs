@@ -7,7 +7,7 @@ mod common;
 
 use agent_passport::passport::{
     agent_signature_preimage, issuer_signature_preimage, verify_issuer_signature, verify_passport,
-    PassportError, PassportVerifyOptions, PassportWarning,
+    PassportError, PassportInputError, PassportVerifyOptions, PassportWarning,
 };
 use common::{public_key_hex, seed_from, sign_hex};
 use serde_json::{json, Value};
@@ -236,15 +236,81 @@ fn temporal_boundaries_pin_equality() {
     assert!(early.errors.contains(&PassportError::NotYetValid));
 
     // A bad evaluation time is the verifier's own error, not a verdict.
-    assert!(verify_passport(
-        &signed,
-        &PassportVerifyOptions {
-            trusted_issuers: &none,
-            evaluation_time: "not-a-time",
-            allowed_clock_skew_ms: 0,
-        },
-    )
-    .is_err());
+    assert_eq!(
+        verify_passport(
+            &signed,
+            &PassportVerifyOptions {
+                trusted_issuers: &none,
+                evaluation_time: "not-a-time",
+                allowed_clock_skew_ms: 0,
+            },
+        ),
+        Err(PassportInputError::InvalidEvaluationTime)
+    );
+}
+
+// --- wave 1.1 item 3: unsigned skew domain and checked arithmetic ---
+
+#[test]
+fn skew_domain_and_arithmetic_boundaries() {
+    let none: Vec<String> = Vec::new();
+    let signed = signed_fixture();
+    let with_skew = |when: &str, skew: u64| {
+        verify_passport(
+            &signed,
+            &PassportVerifyOptions {
+                trusted_issuers: &none,
+                evaluation_time: when,
+                allowed_clock_skew_ms: skew,
+            },
+        )
+    };
+
+    // Skew 0 and a normal positive skew keep their boundary semantics:
+    // one second past expiry is expired at 0 and tolerated at 2000 ms.
+    assert!(with_skew("2027-06-03T12:00:01Z", 0)
+        .unwrap()
+        .errors
+        .contains(&PassportError::Expired));
+    assert!(with_skew("2027-06-03T12:00:01Z", 2_000).unwrap().valid);
+
+    // A large but applicable skew (about 31 thousand years) still works.
+    assert!(
+        with_skew(FIXED_VERIFY_NOW, 1_000_000_000_000_000)
+            .unwrap()
+            .valid
+    );
+
+    // i64::MAX as the skew: converting succeeds, but applying it to any
+    // representable RFC 3339 time leaves the i64 millisecond domain, so
+    // the typed arithmetic error is returned, never a wrap or a panic.
+    // RFC 3339 bounds the evaluation time to years 0 through 9999, so the
+    // near-bottom and near-top cases arise exactly here: the subtraction
+    // underflows at the earliest representable time and the addition
+    // overflows at the latest.
+    assert_eq!(
+        with_skew(FIXED_VERIFY_NOW, i64::MAX as u64),
+        Err(PassportInputError::SkewArithmetic)
+    );
+    assert_eq!(
+        with_skew("0000-01-01T00:00:00Z", i64::MAX as u64),
+        Err(PassportInputError::SkewArithmetic)
+    );
+    assert_eq!(
+        with_skew("9999-12-31T23:59:59Z", i64::MAX as u64),
+        Err(PassportInputError::SkewArithmetic)
+    );
+
+    // Above i64::MAX the checked conversion itself refuses: i64::MAX + 1
+    // and u64::MAX are both the typed arithmetic error.
+    assert_eq!(
+        with_skew(FIXED_VERIFY_NOW, 9_223_372_036_854_775_808),
+        Err(PassportInputError::SkewArithmetic)
+    );
+    assert_eq!(
+        with_skew(FIXED_VERIFY_NOW, u64::MAX),
+        Err(PassportInputError::SkewArithmetic)
+    );
 }
 
 #[test]
