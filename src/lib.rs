@@ -33,5 +33,7 @@
 //! - Error messages never contain signed payload contents, keys, or
 //!   signatures.
 
+pub mod action_ref;
+pub mod crypto;
 pub mod jcs;
 pub mod legacy_canonical;
