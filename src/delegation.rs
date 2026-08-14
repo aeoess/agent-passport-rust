@@ -357,11 +357,16 @@ fn depth_of(link: &Value, key: &str) -> Result<Option<i64>, ()> {
 }
 
 /// Structural narrowing verification of a root-to-leaf chain, ported from
-/// the Go `VerifyDelegationChain`. Proves shape only: linkage, strict depth
-/// increment within the parent's `maxDepth`, scope coverage, spend limit and
-/// unit narrowing, and temporal narrowing with unparseable expiries failing
-/// closed. It checks no signature, no trust, and no evaluation time; use
-/// [`verify_chain_authorization`] for an authorization decision.
+/// the Go `VerifyDelegationChain`. Proves shape only: linkage, per-link
+/// scope and depth type validity, strict depth increment within the
+/// parent's `maxDepth`, scope coverage, spend limit and unit narrowing,
+/// and EXPIRY narrowing (a child may not outlive its parent, with
+/// unparseable expiries failing closed). Expiry narrowing is the only
+/// temporal rule here: `notBefore` containment across hops is NOT checked,
+/// so a child whose `notBefore` starts before its parent's passes this
+/// check, exactly as in the Go reference. It checks no signature, no
+/// trust, and no evaluation time; use [`verify_chain_authorization`] for
+/// an authorization decision.
 pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
     if chain.is_empty() {
         return Err(ChainError::EmptyChain);
