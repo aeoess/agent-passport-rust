@@ -1,0 +1,11 @@
+Agent Passport System - Go SDK (agent-passport-go)
+Copyright 2026 Tymofii Pidlisnyi
+
+This product includes software developed by Tymofii Pidlisnyi (AEOESS).
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This is the verify-first Go implementation of the Agent Passport System
+protocol. It implements protocol primitives only (canonicalization, action_ref,
+signature and delegation-chain verification). It does not implement gateway,
+issuing, or signing-as-a-service logic.
