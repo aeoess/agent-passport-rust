@@ -3,7 +3,6 @@ name = "agent-passport-system"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-publish = false
 description = "Verification-first Rust implementation of Agent Passport System (APS) artifact verifiers"
 readme = "README.md"
 repository = "https://github.com/aeoess/agent-passport-rust"
