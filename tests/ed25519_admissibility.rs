@@ -16,6 +16,19 @@ struct Doc {
     version: String,
     count: usize,
     vectors: Vec<Vector>,
+    artifact_vectors: ArtifactVector,
+}
+
+/// A real delegation whose canonical bytes satisfy the RFC 8032 equation under
+/// a small-order public key, with a full-order canonical R and s < L. It was
+/// minted with no private key.
+#[derive(serde::Deserialize)]
+struct ArtifactVector {
+    #[allow(dead_code)]
+    note: String,
+    public_key_hex: String,
+    canonical_preimage: String,
+    delegation: serde_json::Value,
 }
 
 #[derive(serde::Deserialize)]
@@ -240,4 +253,92 @@ fn the_degenerate_signature_is_message_independent_and_still_refused() {
             "message {i} accepted the message independent signature"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The public-key half of admissibility, isolated.
+//
+// Every vector above that carries a small-order public key also carries
+// R = the identity, so a test on R alone refuses it and the test on A is never
+// exercised. These vectors close that: a canonical order-8 public key, a full
+// order canonical R = [r]B, and a message ground until k = H(R||A||M) mod L is
+// divisible by 8, so [k]A is the identity and [s]B = R + [k]A holds with
+// s = r < L. Only the test on A refuses them.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn small_order_public_key_with_full_order_r_is_rejected() {
+    let d = doc();
+    let mut n = 0;
+    for v in d
+        .vectors
+        .iter()
+        .filter(|v| v.group == "small_order_A_full_order_R")
+    {
+        assert!(
+            !verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+            "{} accepted a small order public key carrying an ordinary R: {}",
+            v.id,
+            v.note
+        );
+        n += 1;
+    }
+    assert_eq!(n, 28, "the isolating vectors must be present");
+}
+
+#[test]
+fn both_halves_of_the_check_are_independently_forced() {
+    let d = doc();
+    let a_only = d
+        .vectors
+        .iter()
+        .filter(|v| v.group == "small_order_A_full_order_R")
+        .count();
+    let r_only = d
+        .vectors
+        .iter()
+        .filter(|v| {
+            v.group == "small_order_R_honest_key" && v.id.starts_with("smallR-honest-")
+        })
+        .count();
+    assert!(a_only > 0, "no vector isolates the public key half");
+    assert!(r_only > 0, "no vector isolates the R half");
+}
+
+/// Artifact path for the same class. This delegation grants payments:transfer
+/// and admin:*, and it was minted with no private key at all.
+#[test]
+fn delegation_with_small_order_signer_and_ordinary_r_is_refused() {
+    use agent_passport::delegation::{
+        delegation_signature_preimage, verify_delegation, verify_delegation_signature,
+        DelegationError,
+    };
+
+    let d = doc();
+    let av = &d.artifact_vectors;
+
+    // The canonical bytes this crate computes must be the ones the signature
+    // was ground against, otherwise the test would pass for the wrong reason.
+    let preimage = delegation_signature_preimage(&av.delegation).unwrap();
+    assert_eq!(
+        preimage, av.canonical_preimage,
+        "canonical bytes differ from the fixture preimage"
+    );
+    assert_eq!(
+        av.delegation["delegatedBy"].as_str().unwrap(),
+        av.public_key_hex
+    );
+
+    assert!(
+        !verify_delegation_signature(&av.delegation),
+        "a delegation granting payments:transfer and admin:*, minted with no \
+         private key, was accepted under a small order signer"
+    );
+    let status = verify_delegation(&av.delegation, "2026-06-01T00:00:00Z").unwrap();
+    assert!(!status.valid);
+    assert!(
+        status.errors.contains(&DelegationError::InvalidSignature),
+        "the refusal reason must be the signature: {:?}",
+        status.errors
+    );
 }

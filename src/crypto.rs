@@ -1,18 +1,28 @@
 //! Ed25519 verification over the raw hex encodings the APS SDKs exchange.
 //!
 //! Admissibility target: the behavior on which the two strict reference
-//! implementations agree, libsodium (`agent-passport-python`
+//! implementations were OBSERVED to agree, libsodium (`agent-passport-python`
 //! `src/agent_passport/crypto.py`) and `ed25519_dalek::VerifyingKey::
 //! verify_strict` (`agent-passport-system` `crates/aps-verifier-core`). The
-//! two were run over a corpus of 2534 vectors that includes the Wycheproof
+//! two were run over a corpus of 2562 vectors that includes the Wycheproof
 //! Ed25519 suite, all eight small-order points in every encoding, small-order
-//! R under honest keys, non-canonical encodings, s >= L, and 2048 ordinary
-//! generated keys. They agreed on every vector, so that agreed behavior is
-//! the rule and this crate implements it: a public key or an R that decodes
-//! to a small-order point is inadmissible, a non-canonically encoded public
-//! key or R is inadmissible, and a scalar s that is not reduced modulo the
-//! group order is inadmissible. `verify_strict` is the dalek entry point that
-//! enforces exactly that set.
+//! R under honest keys, small-order A under an ordinary full-order R,
+//! non-canonical encodings, s >= L, and 2048 ordinary generated keys. They
+//! agreed on every vector.
+//!
+//! That agreement is about observable accept and reject. It is NOT a claim
+//! that the two run the same internal checks, and they do not. Established by
+//! execution against ed25519-dalek 2.2.0: `VerifyingKey::from_bytes` ACCEPTS a
+//! non-canonically encoded public key, so `verify_strict` has no canonical
+//! encoding test on A at all. Its R handling is a byte comparison of the
+//! compressed encoding, so a non-canonically encoded R can never match, and
+//! its scalar test refuses s >= L.
+//!
+//! What the vectors actually force is therefore this, and this is what the
+//! crate relies on: a public key or an R that decodes to a small-order point
+//! is inadmissible, and a scalar s that is not reduced modulo the group order
+//! is inadmissible. `verify_strict` is the dalek entry point that enforces
+//! that set.
 //!
 //! A small-order public key makes the RFC 8032 equation degenerate so one
 //! signature verifies under every message, which is why permissive acceptance
