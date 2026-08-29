@@ -57,15 +57,15 @@ the unit type. `verify_chain_authorization` returns a `ChainAuthorization`
 value. They are deliberately different types so a structural result cannot be
 mistaken for an authorization result at a call site.
 
-**Chain narrowing is checked pairwise, and it is incomplete.** Each hop is
-compared against the link immediately before it. For spend limit and depth
-ceiling, a link that omits the field disables the comparison at that hop, so a
-descendant can hold a ceiling an ancestor bounded. Scope containment and expiry
-containment do reject an omitting child. The draft requires a missing facet to
-be invalid rather than an implicit unconstrained value; the artifact shape this
-crate verifies has no such requirement, and the behavior here matches the
-reference implementations rather than the draft. Do not read a chain pass as
-proof that every dimension narrowed.
+**Chain narrowing is checked against the effective ceiling carried from the
+root.** Spend limit, spend unit, depth ceiling and activation floor are folded
+into a bound as the chain is walked: the minimum spendLimit over the bounded
+ancestors, the unit from the nearest bounded ancestor, the minimum maxDepth,
+and the maximum notBefore. A link that omits one of those fields inherits the
+ancestor bound rather than disabling the comparison, so a descendant cannot hold
+a ceiling an ancestor bounded. Scope containment and expiry containment reject
+an omitting child outright, which is transitively the same result. The ceiling
+is derived only from the artifacts; it is never a remaining balance.
 
 **Signatures establish static limits and not consumed state.** Nothing here
 knows how much of a budget has been spent. A verified chain says what the
