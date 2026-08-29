@@ -33,6 +33,43 @@ fn two(a: Value, b: Value) -> Vec<Value> {
     vec![mk("root", "a", 0, a), mk("a", "b", 1, b)]
 }
 
+/// n-link chain from per-link extras, for the four- and five-link vectors that
+/// tell a minimum-over-ancestors reading apart from a first-ancestor-only one.
+fn chain_of(extras: &[Value]) -> Vec<Value> {
+    extras
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            mk(
+                &format!("k{i}"),
+                &format!("k{}", i + 1),
+                i as i64,
+                d5(e.clone()),
+            )
+        })
+        .collect()
+}
+
+fn spend(v: Option<f64>) -> Value {
+    match v {
+        Some(v) => json!({ "spendLimit": v }),
+        None => json!({}),
+    }
+}
+
+fn depth_chain(start: i64, count: usize, max: i64) -> Vec<Value> {
+    (0..count)
+        .map(|i| {
+            mk(
+                &format!("k{i}"),
+                &format!("k{}", i + 1),
+                start + i as i64,
+                json!({ "maxDepth": max }),
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn xlang_matrix() {
     let rows: Vec<(&str, Vec<Value>)> = vec![
@@ -210,6 +247,64 @@ fn xlang_matrix() {
                 d5(json!({"scope":[]})),
             ),
         ),
+        (
+            "minceil/100->50->75",
+            chain_of(&[spend(Some(100.0)), spend(Some(50.0)), spend(Some(75.0))]),
+        ),
+        (
+            "minceil/100->50->absent->75",
+            chain_of(&[
+                spend(Some(100.0)),
+                spend(Some(50.0)),
+                spend(None),
+                spend(Some(75.0)),
+            ]),
+        ),
+        (
+            "minceil/100->50->absent->absent->75",
+            chain_of(&[
+                spend(Some(100.0)),
+                spend(Some(50.0)),
+                spend(None),
+                spend(None),
+                spend(Some(75.0)),
+            ]),
+        ),
+        (
+            "minceil/100->50->40",
+            chain_of(&[spend(Some(100.0)), spend(Some(50.0)), spend(Some(40.0))]),
+        ),
+        (
+            "minceil/100->80->60->40->20",
+            chain_of(&[
+                spend(Some(100.0)),
+                spend(Some(80.0)),
+                spend(Some(60.0)),
+                spend(Some(40.0)),
+                spend(Some(20.0)),
+            ]),
+        ),
+        (
+            "minceil/20->40->60->80->100",
+            chain_of(&[
+                spend(Some(20.0)),
+                spend(Some(40.0)),
+                spend(Some(60.0)),
+                spend(Some(80.0)),
+                spend(Some(100.0)),
+            ]),
+        ),
+        ("depthfloor/-5 x8 under max2", depth_chain(-5, 8, 2)),
+        ("depthfloor/0,1,2 under max2", depth_chain(0, 3, 2)),
+        ("depthfloor/0,1,2,3 under max2", depth_chain(0, 4, 2)),
+        (
+            "depthfloor/root depth5 under max1",
+            vec![mk("root", "a", 5, json!({"maxDepth": 1}))],
+        ),
+        (
+            "depthfloor/negative maxDepth",
+            vec![mk("root", "a", 0, json!({"maxDepth": -1}))],
+        ),
         ("empty-chain", vec![]),
         (
             "malformed/spendLimit-string",
@@ -246,6 +341,17 @@ fn xlang_matrix() {
         ("exp/2030->2029", "ACCEPT"),
         ("scope/read->absent->wildcard", "REJECT"),
         ("scope/read->absent->absent", "ACCEPT"),
+        ("minceil/100->50->75", "REJECT"),
+        ("minceil/100->50->absent->75", "REJECT"),
+        ("minceil/100->50->absent->absent->75", "REJECT"),
+        ("minceil/100->50->40", "ACCEPT"),
+        ("minceil/100->80->60->40->20", "ACCEPT"),
+        ("minceil/20->40->60->80->100", "REJECT"),
+        ("depthfloor/-5 x8 under max2", "REJECT"),
+        ("depthfloor/0,1,2 under max2", "ACCEPT"),
+        ("depthfloor/0,1,2,3 under max2", "REJECT"),
+        ("depthfloor/root depth5 under max1", "REJECT"),
+        ("depthfloor/negative maxDepth", "REJECT"),
         ("empty-chain", "REJECT"),
         ("malformed/spendLimit-string", "REJECT"),
     ];

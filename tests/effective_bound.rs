@@ -409,6 +409,86 @@ fn authorization_without_revocation_context_is_indeterminate() {
     assert!(token.revocation_checked);
 }
 
+/// The effective ceiling is the MINIMUM over the bounded ancestors, not the
+/// ceiling of the FIRST bounded ancestor. A mutant that sets the bound once at
+/// the root and never tightens it survived the Go, Rust and Python suites
+/// alike, because every spend vector in the table had its smallest ceiling at
+/// the root. These put the smallest ceiling in the middle.
+#[test]
+fn effective_ceiling_is_the_minimum_not_the_first() {
+    fn build(limits: &[Option<f64>]) -> Vec<Value> {
+        limits
+            .iter()
+            .enumerate()
+            .map(|(i, limit)| {
+                let mut base = json!({
+                    "delegatedBy": format!("k{i}"), "delegatedTo": format!("k{}", i + 1),
+                    "scope": ["data:read"], "maxDepth": 9, "currentDepth": i
+                });
+                if let Some(limit) = limit {
+                    base["spendLimit"] = json!(limit);
+                }
+                base
+            })
+            .collect()
+    }
+    let cases: [(&str, Vec<Option<f64>>, bool); 9] = [
+        (
+            "100 -> 50 -> 75",
+            vec![Some(100.0), Some(50.0), Some(75.0)],
+            true,
+        ),
+        (
+            "100 -> 50 -> absent -> 75",
+            vec![Some(100.0), Some(50.0), None, Some(75.0)],
+            true,
+        ),
+        (
+            "100 -> 50 -> absent -> absent -> 75",
+            vec![Some(100.0), Some(50.0), None, None, Some(75.0)],
+            true,
+        ),
+        (
+            "100 -> 50 -> 60",
+            vec![Some(100.0), Some(50.0), Some(60.0)],
+            true,
+        ),
+        (
+            "100 -> 50 -> 40",
+            vec![Some(100.0), Some(50.0), Some(40.0)],
+            false,
+        ),
+        (
+            "100 -> 50 -> absent -> 40",
+            vec![Some(100.0), Some(50.0), None, Some(40.0)],
+            false,
+        ),
+        (
+            "100 -> 50 -> absent -> absent -> 50",
+            vec![Some(100.0), Some(50.0), None, None, Some(50.0)],
+            false,
+        ),
+        (
+            "100 -> 80 -> 60 -> 40 -> 20",
+            vec![Some(100.0), Some(80.0), Some(60.0), Some(40.0), Some(20.0)],
+            false,
+        ),
+        (
+            "20 -> 40 -> 60 -> 80 -> 100",
+            vec![Some(20.0), Some(40.0), Some(60.0), Some(80.0), Some(100.0)],
+            true,
+        ),
+    ];
+    for (name, limits, expect_reject) in cases {
+        let result = verify_chain_structure(&build(&limits));
+        assert_eq!(
+            result.is_err(),
+            expect_reject,
+            "{name}: got {result:?}, expected reject = {expect_reject}"
+        );
+    }
+}
+
 /// A depth ceiling must bound how long a chain can be. Without a floor on
 /// currentDepth, maxDepth 2 admitted an eight-link chain in which every hop
 /// incremented by exactly one and every hop sat at or below the ceiling.
