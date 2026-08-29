@@ -376,13 +376,14 @@ fn authorization_without_revocation_context_is_indeterminate() {
     let trusted = vec![root_public];
     let now = "2026-06-01T00:00:00Z";
 
-    // The no-revocation entry point succeeds, and says on the token that it
-    // established nothing about revocation.
-    let token = verify_chain_authorization(&chain, &trusted, now)
-        .unwrap()
-        .expect("trusted root, valid signatures, live hops");
-    assert_eq!(token.hops, 2);
-    assert!(!token.revocation_checked);
+    // The no-revocation entry point cannot reach a positive verdict: with every
+    // other gate passed, the only undecided question is revocation, and the
+    // answer is indeterminate. Go returns REVOCATION_INDETERMINATE for the same
+    // input, so the two implementations now agree.
+    assert_eq!(
+        verify_chain_authorization(&chain, &trusted, now).unwrap(),
+        Err(ChainError::RevocationIndeterminate { hop: 0 })
+    );
 
     // A resolver that cannot answer yields indeterminate, never a positive
     // authorization.

@@ -352,9 +352,18 @@ fn signed_chain() -> (Vec<Value>, String) {
 fn authorization_requires_a_trusted_root() {
     let (chain, root_public) = signed_chain();
     let trusted = vec![root_public];
-    let authorized = verify_chain_authorization(&chain, &trusted, NOW).unwrap();
-    let proof = authorized.expect("chain authorizes under its trusted root");
-    assert_eq!(proof.hops, 2);
+    // The trust root, the signatures and the validity windows all pass, so the
+    // only thing left undecided is revocation, and the answer is indeterminate
+    // rather than a positive authorization. This assertion moved from a token
+    // to RevocationIndeterminate: returning a token here read as authorization
+    // for a chain whose hops may all have been revoked, and Go returns
+    // REVOCATION_INDETERMINATE for the identical input. The positive verdict
+    // now comes only from verify_chain_authorization_with_revocation, which is
+    // asserted in tests/effective_bound.rs.
+    assert_eq!(
+        verify_chain_authorization(&chain, &trusted, NOW).unwrap(),
+        Err(ChainError::RevocationIndeterminate { hop: 0 })
+    );
 
     let untrusted: Vec<String> = vec![public_key_hex(&seed_from("someone-else"))];
     assert_eq!(

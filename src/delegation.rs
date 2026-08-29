@@ -139,6 +139,25 @@ fn parse_ms(ts: &str) -> Option<i64> {
 /// evaluation time; not yet valid only when `notBefore` is strictly later.
 /// Equality on either boundary is live.
 ///
+/// LENIENT PROFILE, deliberate and pinned. This single-delegation path mirrors
+/// the TypeScript reference rather than the chain path's stricter domain, and
+/// the difference is load bearing for parity:
+///
+/// - `currentDepth` and `maxDepth` are read with `as_f64`, so FRACTIONAL depths
+///   are accepted and compared numerically (1.5 under a maxDepth of 3 is
+///   valid), where [`verify_chain_structure`] requires integers.
+/// - a `currentDepth` or `maxDepth` of the wrong TYPE (a string, a boolean) is
+///   read as absent and the depth bound simply does not trip, where the chain
+///   path reports `DepthNotAnInteger`.
+/// - a non-string `notBefore` is skipped rather than refused.
+/// - negative depths are accepted here; the chain path refuses them.
+///
+/// None of this can widen authority: the bound it can fail to impose is a
+/// per-link depth bound, and every chain the authorization path accepts has
+/// been through [`verify_chain_structure`] first, which applies the strict
+/// domain to every link. Callers who want the strict domain on a single
+/// delegation should run it as a one-link chain.
+///
 /// Returns an error only when `evaluation_time` itself cannot be parsed.
 pub fn verify_delegation(
     delegation: &Value,
@@ -705,12 +724,10 @@ pub struct ChainAuthorization {
     pub hops: usize,
     /// Whether revocation state was established for every hop.
     ///
-    /// `false` means no revocation context was supplied, so this token says
-    /// nothing about whether any hop has been revoked. It is deliberately part
-    /// of the token rather than a footnote in the docs: a caller that requires
-    /// a revocation-aware decision must check this flag, or call
-    /// [`verify_chain_authorization_with_revocation`], which cannot return a
-    /// token with it unset.
+    /// Always `true`: no entry point returns a token without revocation
+    /// evidence. It stays on the token so a caller reading one can see what it
+    /// establishes rather than having to know the API contract, and it mirrors
+    /// the Go ChainAuthorization field of the same meaning.
     pub revocation_checked: bool,
 }
 
@@ -732,9 +749,13 @@ pub type RevocationResolver<'a> = &'a dyn Fn(&Value) -> Option<bool>;
 /// - every hop to be fully valid at `evaluation_time` per
 ///   [`verify_delegation`] (active window, depth bound)
 ///
-/// It does NOT check revocation, and the token it returns says so:
-/// `revocation_checked` is `false`. A caller that needs a revocation-aware
-/// decision must use [`verify_chain_authorization_with_revocation`].
+/// It has NO revocation context, so it cannot return a positive
+/// authorization: on the path where every other gate passes it reports
+/// [`ChainError::RevocationIndeterminate`], matching the Go
+/// VerifyChainAuthorization, which returns REVOCATION_INDETERMINATE for the
+/// same input. It previously returned a token here, which read as a positive
+/// authorization for a chain whose hops may all have been revoked. Use
+/// [`verify_chain_authorization_with_revocation`] to reach a positive verdict.
 ///
 /// Returns an error only when `evaluation_time` itself cannot be parsed;
 /// chain findings are the `Err(ChainError)` arm of the inner result.
@@ -763,10 +784,7 @@ pub fn verify_chain_authorization(
             return Ok(Err(ChainError::HopInactive { hop }));
         }
     }
-    Ok(Ok(ChainAuthorization {
-        hops: chain.len(),
-        revocation_checked: false,
-    }))
+    Ok(Err(ChainError::RevocationIndeterminate { hop: 0 }))
 }
 
 /// Authorization verification with revocation context.
@@ -785,8 +803,10 @@ pub fn verify_chain_authorization_with_revocation(
     revocation: RevocationResolver<'_>,
 ) -> Result<Result<ChainAuthorization, ChainError>, TimestampError> {
     match verify_chain_authorization(chain, trusted_roots, evaluation_time)? {
-        Err(violation) => Ok(Err(violation)),
-        Ok(_) => {
+        // The indeterminate arm is exactly the path where every other gate
+        // passed and only revocation was missing, which is the path this
+        // function supplies the evidence for.
+        Err(ChainError::RevocationIndeterminate { .. }) => {
             for (hop, link) in chain.iter().enumerate() {
                 match revocation(link) {
                     None => return Ok(Err(ChainError::RevocationIndeterminate { hop })),
@@ -799,5 +819,7 @@ pub fn verify_chain_authorization_with_revocation(
                 revocation_checked: true,
             }))
         }
+        Err(violation) => Ok(Err(violation)),
+        Ok(token) => Ok(Ok(token)),
     }
 }
