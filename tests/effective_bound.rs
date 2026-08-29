@@ -407,3 +407,41 @@ fn authorization_without_revocation_context_is_indeterminate() {
     assert_eq!(token.hops, 2);
     assert!(token.revocation_checked);
 }
+
+/// A depth ceiling must bound how long a chain can be. Without a floor on
+/// currentDepth, maxDepth 2 admitted an eight-link chain in which every hop
+/// incremented by exactly one and every hop sat at or below the ceiling.
+#[test]
+fn depth_ceiling_bounds_chain_length() {
+    fn depth_chain(start: i64, count: usize, max: i64) -> Vec<Value> {
+        (0..count)
+            .map(|i| {
+                json!({
+                    "delegatedBy": format!("k{i}"), "delegatedTo": format!("k{}", i + 1),
+                    "scope": ["data:read"], "maxDepth": max,
+                    "currentDepth": start + i as i64
+                })
+            })
+            .collect()
+    }
+    assert_eq!(
+        verify_chain_structure(&depth_chain(-5, 8, 2)),
+        Err(ChainError::DepthBelowZero { hop: 0 }),
+        "maxDepth 2 must not admit an eight-link chain starting at -5"
+    );
+    // The honest chain under the same ceiling is exactly three links.
+    assert_eq!(verify_chain_structure(&depth_chain(0, 3, 2)), Ok(()));
+    assert_eq!(
+        verify_chain_structure(&depth_chain(0, 4, 2)),
+        Err(ChainError::DepthLimitExceeded { hop: 3 })
+    );
+    // A root outside its own ceiling is refused, which nothing checked before.
+    let bad_root = json!({
+        "delegatedBy": "root", "delegatedTo": "a", "scope": ["data:read"],
+        "maxDepth": 1, "currentDepth": 5
+    });
+    assert_eq!(
+        verify_chain_structure(&[bad_root]),
+        Err(ChainError::DepthLimitExceeded { hop: 0 })
+    );
+}

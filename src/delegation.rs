@@ -242,6 +242,17 @@ pub enum ChainError {
         /// Index of the offending link.
         hop: usize,
     },
+    /// A `currentDepth` or `maxDepth` is below zero. `currentDepth` is a
+    /// POSITION in a chain, so it is never negative, and the depth ceiling only
+    /// bounds chain LENGTH once there is a floor: with `maxDepth` 2 and a root
+    /// at `currentDepth` -5, an eight-link chain incremented by exactly one at
+    /// every hop and stayed at or below the ceiling throughout. The rule held
+    /// to the letter and failed in purpose.
+    #[error("depth below zero at hop {hop}")]
+    DepthBelowZero {
+        /// Index of the offending link.
+        hop: usize,
+    },
     /// The child's depth exceeds the parent's `maxDepth`.
     #[error("depth limit exceeded at hop {hop}")]
     DepthLimitExceeded {
@@ -548,6 +559,22 @@ impl EffectiveBound {
     }
 }
 
+/// Refuse a negative depth. Kept separate from [`depth_of`], which owns the
+/// TYPE domain: a negative integer is still a valid integer, and this is the
+/// VALUE rule that a position in a chain cannot be below zero.
+fn check_depth_floor(link: &Value, hop: usize) -> Result<(), ChainError> {
+    for key in ["currentDepth", "maxDepth"] {
+        if let Some(depth) =
+            depth_of(link, key).map_err(|()| ChainError::DepthNotAnInteger { hop })?
+        {
+            if depth < 0 {
+                return Err(ChainError::DepthBelowZero { hop });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Structural narrowing verification of a root-to-leaf chain, ported from
 /// the Go `VerifyDelegationChain`. Proves shape only: linkage, per-link
 /// scope, depth, spend and string member type validity, strict depth
@@ -595,12 +622,21 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
         }
     }
 
-    // Seed the effective ceiling from the root. Whether the root's own
-    // currentDepth sits inside its own maxDepth is a per-link question, not a
-    // narrowing question: [`verify_delegation`] reports it as depth_exceeded,
-    // and the authorization path runs that on every hop.
+    // Seed the effective ceiling from the root, and check the root against it.
+    // An earlier revision left the root unchecked, on the argument that a
+    // link's own depth is answered by verify_delegation on the authorization
+    // path. Preserving a pinned refusal index is not a security argument, and
+    // the structural check is reached by callers that never run the
+    // authorization path at all.
     let mut bound = EffectiveBound::default();
     bound.narrow(&chain[0], 0)?;
+    check_depth_floor(&chain[0], 0)?;
+    let root_depth = depth_of(&chain[0], "currentDepth")
+        .map_err(|()| ChainError::DepthNotAnInteger { hop: 0 })?
+        .unwrap_or(0);
+    if bound.max_depth.is_some_and(|max| root_depth > max) {
+        return Err(ChainError::DepthLimitExceeded { hop: 0 });
+    }
 
     for hop in 1..chain.len() {
         let parent = &chain[hop - 1];
@@ -625,6 +661,7 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
             // baseline rejection (recorded in the phase 0 matrix).
             _ => return Err(ChainError::DepthNotMonotonic { hop }),
         }
+        check_depth_floor(child, hop)?;
         if bound.max_depth.is_some_and(|max| child_depth > max) {
             return Err(ChainError::DepthLimitExceeded { hop });
         }

@@ -548,28 +548,42 @@ fn chain_refuses_non_integral_depths() {
 
 #[test]
 fn chain_depth_accepted_states_are_preserved() {
-    // Null and absent stay the Go nil default (0); negative integral
-    // chains stay accepted; the literal -0 is accepted as 0 (Go parses it
-    // to 0); a negative maxDepth stays a value-domain rejection at the
-    // verifier layer, not a type error.
+    // Null and absent stay the Go nil default (0); the literal -0 is accepted
+    // as 0 (Go parses it to 0); a negative maxDepth stays a value-domain
+    // rejection at the verifier layer, not a type error.
+    //
+    // The negative-depth cases below moved from Ok(()) to DepthBelowZero. They
+    // are still TYPE-domain assertions and still make their original point: a
+    // negative integer parses as an integer, so the refusal is DepthBelowZero
+    // and never DepthNotAnInteger. What changed is the VALUE rule. A negative
+    // currentDepth is what let an eight-link chain fit inside a maxDepth of 2,
+    // so a depth ceiling did not bound chain length until the floor existed.
     let null_child = chain_doc(
         r#"[
         {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":-1},
         {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":null}
         ]"#,
     );
-    assert_eq!(verify_chain_structure(&null_child), Ok(()));
+    assert_eq!(
+        verify_chain_structure(&null_child),
+        Err(ChainError::DepthBelowZero { hop: 0 })
+    );
     let negative = chain_doc(
         r#"[
         {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":-2},
         {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":-1}
         ]"#,
     );
-    assert_eq!(verify_chain_structure(&negative), Ok(()));
+    assert_eq!(
+        verify_chain_structure(&negative),
+        Err(ChainError::DepthBelowZero { hop: 0 })
+    );
+    // The literal -0 is still parsed as the integer 0, not rejected as a
+    // fractional or out-of-domain number, and 0 is not below the floor.
     let minus_zero = chain_doc(
         r#"[
-        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":-1},
-        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":-0}
+        {"delegatedBy":"root-key","delegatedTo":"agent-a","scope":["read"],"currentDepth":-0},
+        {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":1}
         ]"#,
     );
     assert_eq!(verify_chain_structure(&minus_zero), Ok(()));
@@ -591,9 +605,14 @@ fn chain_depth_accepted_states_are_preserved() {
         {"delegatedBy":"agent-a","delegatedTo":"agent-b","scope":["read"],"currentDepth":1}
         ]"#,
     );
+    // A negative maxDepth is now caught by the floor at the root, before the
+    // pairwise step reaches it. The refusal index moved from hop 1 to hop 0
+    // because the root is checked against its own bounds at all now; the point
+    // the case makes, that a negative ceiling is a value rejection rather than
+    // a type error, is unchanged.
     assert_eq!(
         verify_chain_structure(&negative_bound),
-        Err(ChainError::DepthLimitExceeded { hop: 1 })
+        Err(ChainError::DepthBelowZero { hop: 0 })
     );
     // A parent at exactly i64::MAX has no +1 child: the checked add keeps
     // the baseline rejection (Go's int wraps here; recorded divergence).
