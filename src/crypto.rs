@@ -1,21 +1,31 @@
 //! Ed25519 verification over the raw hex encodings the APS SDKs exchange.
 //!
-//! Parity target: `verify` in the reference TypeScript SDK
-//! (`src/crypto/keys.ts`, Node crypto over OpenSSL) and `VerifyEd25519` in
-//! the Go implementation (`verify/verify.go`, crypto/ed25519). All three
-//! implement the RFC 8032 verification equation without the additional
-//! `verify_strict` checks: `ed25519_dalek::VerifyingKey::verify` is used
-//! deliberately, because `verify_strict` rejects some inputs (for example
-//! small-order public keys) that Node and Go accept, and byte-for-byte
-//! compatibility with the reference decides. The pinned boundary behaviors
-//! are: mixed-case hex accepted, wrong lengths rejected before any parsing,
-//! and a signature whose scalar is not canonical (S plus the group order)
-//! rejected, as all three implementations reject it.
+//! Admissibility target: the behavior on which the two strict reference
+//! implementations agree, libsodium (`agent-passport-python`
+//! `src/agent_passport/crypto.py`) and `ed25519_dalek::VerifyingKey::
+//! verify_strict` (`agent-passport-system` `crates/aps-verifier-core`). The
+//! two were run over a corpus of 2534 vectors that includes the Wycheproof
+//! Ed25519 suite, all eight small-order points in every encoding, small-order
+//! R under honest keys, non-canonical encodings, s >= L, and 2048 ordinary
+//! generated keys. They agreed on every vector, so that agreed behavior is
+//! the rule and this crate implements it: a public key or an R that decodes
+//! to a small-order point is inadmissible, a non-canonically encoded public
+//! key or R is inadmissible, and a scalar s that is not reduced modulo the
+//! group order is inadmissible. `verify_strict` is the dalek entry point that
+//! enforces exactly that set.
+//!
+//! A small-order public key makes the RFC 8032 equation degenerate so one
+//! signature verifies under every message, which is why permissive acceptance
+//! is not a compatibility choice a verifier may make.
+//!
+//! The pinned boundary behaviors are unchanged: mixed-case hex accepted,
+//! wrong lengths rejected before any parsing, and a signature whose scalar is
+//! not canonical (S plus the group order) rejected.
 //!
 //! This module is verification-only. There is no key generation and no
-//! signing.
+//! signing. Signature preimages and canonical bytes are untouched.
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 
 /// Verify a raw Ed25519 signature over `message`.
 ///
@@ -27,6 +37,10 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 /// reference SDKs. Malformed hex, an invalid point encoding, a wrong key, a
 /// modified message, and a modified or non-canonical signature all return
 /// `false`.
+///
+/// A public key or an R that decodes to a small-order point, a non-canonical
+/// encoding of either, and a non-reduced scalar are all rejected here, so no
+/// caller can reach an artifact check with inadmissible key material.
 ///
 /// This is the one deliberately `bool`-valued primitive in the crate: it
 /// answers exactly one question. Higher-level verifiers wrap it in typed
@@ -51,5 +65,5 @@ pub fn verify_ed25519(message: &[u8], signature_hex: &str, public_key_hex: &str)
         return false;
     };
     let signature = Signature::from_bytes(&signature_array);
-    verifying_key.verify(message, &signature).is_ok()
+    verifying_key.verify_strict(message, &signature).is_ok()
 }

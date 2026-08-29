@@ -157,35 +157,34 @@ fn invalid_point_encoding_rejects() {
 }
 
 #[test]
-fn small_order_boundary_pins_verify_over_verify_strict() {
-    // Wave 1.1 item 5. Deterministic small order vector: the public key is
-    // the canonical encoding of the Edwards identity point (order 1), the
-    // signature is R = the same encoding with S = 0, so the RFC 8032
-    // equation [S]B = R + [k]A degenerates to identity = identity for
-    // every message. Observed through the complete pinned reference paths
-    // (probes/phase0/MATRIX.md): the TypeScript SDK verify() and full
-    // verifyDelegation (Node v24.11.1) ACCEPT, the Go VerifyEd25519 and
-    // full VerifyCanonicalSignature (go1.26.3) ACCEPT. This test pins the
-    // Rust halves of that four-way matrix: the crate's plain-verify path
-    // agrees with both references, and dalek's verify_strict alone
-    // differs, which is exactly the wave 1 ground for choosing verify.
-    use ed25519_dalek::{Signature, VerifyingKey};
+fn small_order_boundary_pins_verify_strict_over_verify() {
+    // Deterministic small order vector: the public key is the canonical
+    // encoding of the Edwards identity point (order 1), the signature is
+    // R = the same encoding with S = 0, so the RFC 8032 equation
+    // [S]B = R + [k]A degenerates to identity = identity for every message.
+    // One signature would verify under every message, which is why the
+    // vector is inadmissible rather than merely unusual.
+    //
+    // The crate rejects it, and so does dalek's verify_strict, which is the
+    // entry point the crate calls. Plain `verify` accepts it; that difference
+    // is the whole reason the strict entry point is the one used.
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
     let small_order_public = format!("01{}", "00".repeat(31));
     let small_order_signature = format!("01{}{}", "00".repeat(31), "00".repeat(32));
     let message = b"APS wave1.1 small order probe";
 
     assert!(
-        verify_ed25519(message, &small_order_signature, &small_order_public),
-        "plain verify accepts the small order vector, as Node and Go do"
+        !verify_ed25519(message, &small_order_signature, &small_order_public),
+        "the crate rejects the degenerate small order vector"
     );
     assert!(
-        verify_ed25519(
+        !verify_ed25519(
             b"a completely different message",
             &small_order_signature,
             &small_order_public
         ),
-        "the degenerate vector is message independent"
+        "and rejects it under an unrelated message too"
     );
 
     let key_bytes: [u8; 32] = hex::decode(&small_order_public)
@@ -200,6 +199,11 @@ fn small_order_boundary_pins_verify_over_verify_strict() {
     let signature = Signature::from_bytes(&signature_bytes);
     assert!(
         key.verify_strict(message, &signature).is_err(),
-        "verify_strict rejects the same vector: the one path that differs"
+        "verify_strict rejects it, which is the behavior the crate adopts"
+    );
+    assert!(
+        key.verify(message, &signature).is_ok(),
+        "plain verify still accepts it: the one path that differs, and the \
+         reason this crate does not call it"
     );
 }
