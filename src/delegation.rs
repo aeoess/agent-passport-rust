@@ -11,16 +11,21 @@
 //! key. Delegations travel as raw [`serde_json::Value`] so the preimage
 //! covers exactly the members the signer included.
 //!
-//! Out of scope in wave 1, recorded rather than merged: revocation state
-//! (the reference draws it from a caller-supplied cache or the gateway
-//! store) and the separate a2a-1496 composition-map chain profile with its
-//! own field names and refusal codes.
+//! Revocation state arrives from OUTSIDE the artifact, through a caller
+//! supplied resolver ([`verify_chain_authorization_with_revocation`]). It is
+//! never a member of a chain link: links are signed wire objects and adding a
+//! member would change the bytes the delegator signed. Out of scope, recorded
+//! rather than merged: the separate a2a-1496 composition-map chain profile
+//! with its own field names and refusal codes.
 //!
 //! Structural checks and authorization are distinct operations with distinct
 //! result types: [`verify_chain_structure`] proves narrowing shape only,
 //! while [`verify_chain_authorization`] additionally requires every hop
 //! signature to verify, every hop to be active at the explicit evaluation
-//! time, and the root delegator to be explicitly trusted.
+//! time, and the root delegator to be explicitly trusted. Neither claims
+//! anything about revocation; [`verify_chain_authorization_with_revocation`]
+//! is the one that does, and it reports INDETERMINATE rather than a positive
+//! verdict when the resolver cannot answer.
 
 use serde_json::Value;
 
@@ -340,6 +345,22 @@ pub enum ChainError {
     /// Authorization only: the root delegator is not in the trusted set.
     #[error("root delegator is not trusted")]
     UntrustedRoot,
+    /// Authorization only: the resolver reported a hop revoked at the
+    /// evaluation time.
+    #[error("hop {hop} is revoked")]
+    HopRevoked {
+        /// Index of the revoked hop.
+        hop: usize,
+    },
+    /// Authorization only: revocation state could not be established for a
+    /// hop, so authorization is INDETERMINATE. This is not a positive
+    /// authorization and not a refusal on the merits. Treating "cannot check"
+    /// as "not revoked" is the fail-open this state exists to prevent.
+    #[error("revocation state is indeterminate at hop {hop}")]
+    RevocationIndeterminate {
+        /// Index of the hop whose revocation state is unknown.
+        hop: usize,
+    },
 }
 
 fn str_field<'a>(link: &'a Value, key: &str) -> &'a str {
@@ -645,7 +666,25 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
 pub struct ChainAuthorization {
     /// Number of links the authorization covered.
     pub hops: usize,
+    /// Whether revocation state was established for every hop.
+    ///
+    /// `false` means no revocation context was supplied, so this token says
+    /// nothing about whether any hop has been revoked. It is deliberately part
+    /// of the token rather than a footnote in the docs: a caller that requires
+    /// a revocation-aware decision must check this flag, or call
+    /// [`verify_chain_authorization_with_revocation`], which cannot return a
+    /// token with it unset.
+    pub revocation_checked: bool,
 }
+
+/// Resolves whether a chain link is revoked at the evaluation time. `None`
+/// means the resolver cannot answer, which is not the same as answering "not
+/// revoked".
+///
+/// Revocation state is NOT carried on the link. Legacy chain links are signed
+/// wire objects and adding a member to them would change the bytes the
+/// delegator signed, so the state arrives from outside, through this resolver.
+pub type RevocationResolver<'a> = &'a dyn Fn(&Value) -> Option<bool>;
 
 /// Authorization verification of a root-to-leaf chain at an explicit
 /// evaluation time. On top of [`verify_chain_structure`] it requires:
@@ -655,6 +694,10 @@ pub struct ChainAuthorization {
 /// - every hop's signature to verify over the legacy preimage
 /// - every hop to be fully valid at `evaluation_time` per
 ///   [`verify_delegation`] (active window, depth bound)
+///
+/// It does NOT check revocation, and the token it returns says so:
+/// `revocation_checked` is `false`. A caller that needs a revocation-aware
+/// decision must use [`verify_chain_authorization_with_revocation`].
 ///
 /// Returns an error only when `evaluation_time` itself cannot be parsed;
 /// chain findings are the `Err(ChainError)` arm of the inner result.
@@ -683,5 +726,41 @@ pub fn verify_chain_authorization(
             return Ok(Err(ChainError::HopInactive { hop }));
         }
     }
-    Ok(Ok(ChainAuthorization { hops: chain.len() }))
+    Ok(Ok(ChainAuthorization {
+        hops: chain.len(),
+        revocation_checked: false,
+    }))
+}
+
+/// Authorization verification with revocation context.
+///
+/// Everything [`verify_chain_authorization`] requires, plus a resolvable
+/// not-revoked state for every hop. A resolver that returns `None` for a hop
+/// yields [`ChainError::RevocationIndeterminate`] rather than a positive
+/// authorization: treating "cannot check" as "not revoked" is exactly the
+/// fail-open this function exists to prevent.
+///
+/// The token this returns always has `revocation_checked` set.
+pub fn verify_chain_authorization_with_revocation(
+    chain: &[Value],
+    trusted_roots: &[String],
+    evaluation_time: &str,
+    revocation: RevocationResolver<'_>,
+) -> Result<Result<ChainAuthorization, ChainError>, TimestampError> {
+    match verify_chain_authorization(chain, trusted_roots, evaluation_time)? {
+        Err(violation) => Ok(Err(violation)),
+        Ok(_) => {
+            for (hop, link) in chain.iter().enumerate() {
+                match revocation(link) {
+                    None => return Ok(Err(ChainError::RevocationIndeterminate { hop })),
+                    Some(true) => return Ok(Err(ChainError::HopRevoked { hop })),
+                    Some(false) => {}
+                }
+            }
+            Ok(Ok(ChainAuthorization {
+                hops: chain.len(),
+                revocation_checked: true,
+            }))
+        }
+    }
 }

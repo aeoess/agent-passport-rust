@@ -337,3 +337,73 @@ fn scope_absence_is_zero_authority() {
     ];
     assert_eq!(verify_chain_structure(&narrowed), Ok(()));
 }
+
+/// A chain that is internally well signed under a trusted root is still not a
+/// revocation-aware authorization. The token says which of the two it is, and
+/// the revocation-aware entry point refuses to return a positive verdict when
+/// the resolver cannot answer.
+#[test]
+fn authorization_without_revocation_context_is_indeterminate() {
+    use agent_passport::delegation::{
+        delegation_signature_preimage, verify_chain_authorization,
+        verify_chain_authorization_with_revocation, ChainError,
+    };
+    use common::{public_key_hex, seed_from, sign_hex};
+
+    let root_seed = seed_from("revocation-root");
+    let mid_seed = seed_from("revocation-mid");
+    let root_public = public_key_hex(&root_seed);
+    let mid_public = public_key_hex(&mid_seed);
+    let leaf_public = public_key_hex(&seed_from("revocation-leaf"));
+
+    let mut root = json!({
+        "delegatedBy": root_public, "delegatedTo": mid_public, "scope": ["repo:write"],
+        "maxDepth": 3, "currentDepth": 0, "expiresAt": "2027-01-01T00:00:00Z"
+    });
+    root["signature"] = json!(sign_hex(
+        &delegation_signature_preimage(&root).unwrap(),
+        &root_seed
+    ));
+    let mut child = json!({
+        "delegatedBy": mid_public, "delegatedTo": leaf_public, "scope": ["repo:write"],
+        "maxDepth": 3, "currentDepth": 1, "expiresAt": "2026-12-01T00:00:00Z"
+    });
+    child["signature"] = json!(sign_hex(
+        &delegation_signature_preimage(&child).unwrap(),
+        &mid_seed
+    ));
+    let chain = vec![root, child];
+    let trusted = vec![root_public];
+    let now = "2026-06-01T00:00:00Z";
+
+    // The no-revocation entry point succeeds, and says on the token that it
+    // established nothing about revocation.
+    let token = verify_chain_authorization(&chain, &trusted, now)
+        .unwrap()
+        .expect("trusted root, valid signatures, live hops");
+    assert_eq!(token.hops, 2);
+    assert!(!token.revocation_checked);
+
+    // A resolver that cannot answer yields indeterminate, never a positive
+    // authorization.
+    let unknown = |_: &Value| None;
+    assert_eq!(
+        verify_chain_authorization_with_revocation(&chain, &trusted, now, &unknown).unwrap(),
+        Err(ChainError::RevocationIndeterminate { hop: 0 })
+    );
+
+    // A resolver that reports a revocation refuses.
+    let revoked = |_: &Value| Some(true);
+    assert_eq!(
+        verify_chain_authorization_with_revocation(&chain, &trusted, now, &revoked).unwrap(),
+        Err(ChainError::HopRevoked { hop: 0 })
+    );
+
+    // A resolver that can answer produces a token that says so.
+    let live = |_: &Value| Some(false);
+    let token = verify_chain_authorization_with_revocation(&chain, &trusted, now, &live)
+        .unwrap()
+        .expect("trusted root and a resolver that can answer");
+    assert_eq!(token.hops, 2);
+    assert!(token.revocation_checked);
+}
