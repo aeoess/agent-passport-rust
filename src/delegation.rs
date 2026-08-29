@@ -260,9 +260,49 @@ pub enum ChainError {
         /// Index of the offending link.
         hop: usize,
     },
-    /// The child's spend limit exceeds the parent's.
+    /// The child's spend limit exceeds the effective inherited ceiling.
     #[error("spend limit widening at hop {hop}")]
     SpendLimitWidening {
+        /// Index of the child link.
+        hop: usize,
+    },
+    /// A present `spendLimit` is not a JSON number. The Go reference rejects
+    /// these at deserialization (`*float64`). At baseline the ceiling was read
+    /// through a bare `as_f64`, which yields `None` for a string, a boolean, an
+    /// array, or an object, and `None` was indistinguishable from absent: a
+    /// malformed ceiling silently disabled the check. An explicit JSON null is
+    /// NOT this error; it is the absent case, as it is for depth.
+    #[error("spend limit is not a number at hop {hop}")]
+    SpendLimitNotANumber {
+        /// Index of the offending link.
+        hop: usize,
+    },
+    /// The child's `maxDepth` exceeds the effective inherited `maxDepth`.
+    #[error("depth limit widening at hop {hop}")]
+    DepthLimitWidening {
+        /// Index of the child link.
+        hop: usize,
+    },
+    /// A present `delegatedBy`, `delegatedTo`, `spendLimitUnit`, `expiresAt`,
+    /// or `notBefore` is not a JSON string. The Go reference rejects these at
+    /// deserialization (`string` fields). Reading them through
+    /// `as_str().unwrap_or("")` turned a malformed member into the empty
+    /// string, which disabled the unit check and made two links with non-string
+    /// identities compare equal to each other in the linkage check.
+    #[error("member is not a string at hop {hop}")]
+    MemberNotAString {
+        /// Index of the offending link.
+        hop: usize,
+    },
+    /// A non-empty `notBefore` failed to parse; the chain fails closed.
+    #[error("notBefore unparseable at hop {hop}")]
+    NotBeforeUnparseable {
+        /// Index of the offending link.
+        hop: usize,
+    },
+    /// The child activates earlier than the effective inherited `notBefore`.
+    #[error("activation widening at hop {hop}")]
+    ActivationWidening {
         /// Index of the child link.
         hop: usize,
     },
@@ -329,6 +369,54 @@ fn scopes_of(link: &Value) -> Result<Vec<String>, ()> {
     }
 }
 
+/// Checked string extraction, the only place chain code reads an identity,
+/// a spend unit, or a timestamp.
+///
+/// Absent and null are the Go zero value (the empty string). A present member
+/// must be a JSON string; any other type is an error, never a silent empty
+/// string. Go rejects those at deserialization, and the empty string is load
+/// bearing here: it disables the unit check and makes two links whose
+/// identities are both malformed compare equal in the linkage check.
+fn text_of<'a>(link: &'a Value, key: &str) -> Result<&'a str, ()> {
+    match link.get(key) {
+        None | Some(Value::Null) => Ok(""),
+        Some(Value::String(text)) => Ok(text),
+        Some(_) => Err(()),
+    }
+}
+
+/// Checked spend-ceiling extraction, the only place chain code reads
+/// `spendLimit`.
+///
+/// Absent and null are the Go nil default (no ceiling stated), exactly as for
+/// depth. A present ceiling must be a JSON number; a string, boolean, array, or
+/// object is an error. A malformed ceiling must FAIL rather than silently
+/// disable the check, which is what a bare `as_f64` did by collapsing every
+/// malformed type into the same `None` that absence produces.
+fn spend_limit_of(link: &Value) -> Result<Option<f64>, ()> {
+    match link.get("spendLimit") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number.as_f64().map(Some).ok_or(()),
+        Some(_) => Err(()),
+    }
+}
+
+/// The spend unit a link ASSERTS. A bare `spendLimit` with no explicit
+/// `spendLimitUnit` asserts the default unit `currency`, matching the reference
+/// SDK (`src/core/delegation.ts`). Without that default, a currency budget could
+/// be relabelled by omitting the unit one hop down. An empty result means the
+/// link binds no spend dimension at all.
+fn stated_unit(link: &Value) -> Result<&str, ()> {
+    let unit = text_of(link, "spendLimitUnit")?;
+    if !unit.is_empty() {
+        return Ok(unit);
+    }
+    if spend_limit_of(link)?.is_some() {
+        return Ok("currency");
+    }
+    Ok("")
+}
+
 /// Checked depth extraction, the only place chain code reads `currentDepth`
 /// or `maxDepth`.
 ///
@@ -356,17 +444,108 @@ fn depth_of(link: &Value, key: &str) -> Result<Option<i64>, ()> {
     }
 }
 
+/// The authority ceiling a chain carries from its root down to the link being
+/// checked. It is derived only from the artifacts in the chain: a CEILING,
+/// never a remaining balance. Remaining balances belong to the ledger and a
+/// stateless verifier does not reconstruct them.
+///
+/// A bounded ancestor facet never becomes unconstrained because a descendant
+/// omitted the field. The effective spend ceiling is the MINIMUM `spendLimit`
+/// over the bounded ancestors, with the unit carried from the NEAREST bounded
+/// ancestor; `maxDepth` narrows the same way, and `notBefore` narrows upward as
+/// the MAXIMUM over the bounded ancestors. An omitted facet inherits; it never
+/// means infinity.
+#[derive(Default)]
+struct EffectiveBound {
+    spend_limit: Option<f64>,
+    spend_unit: String,
+    max_depth: Option<i64>,
+    not_before: Option<i64>,
+}
+
+impl EffectiveBound {
+    /// Fold one link's stated bounds into the effective ceiling, returning the
+    /// first violation. A stated bound may only tighten what it inherited; an
+    /// omitted bound inherits the ancestor bound unchanged.
+    fn narrow(&mut self, link: &Value, hop: usize) -> Result<(), ChainError> {
+        let stated = stated_unit(link).map_err(|()| self.member_error(link, hop))?;
+        if self.spend_unit.is_empty() {
+            // No ancestor has bound the unit yet: this link may introduce one,
+            // which is narrowing rather than conversion.
+            self.spend_unit = stated.to_string();
+        } else if !stated.is_empty() && stated != self.spend_unit {
+            return Err(ChainError::SpendUnitChanged { hop });
+        }
+
+        if let Some(limit) =
+            spend_limit_of(link).map_err(|()| ChainError::SpendLimitNotANumber { hop })?
+        {
+            match self.spend_limit {
+                Some(effective) if limit > effective => {
+                    return Err(ChainError::SpendLimitWidening { hop })
+                }
+                Some(effective) if limit < effective => self.spend_limit = Some(limit),
+                Some(_) => {}
+                None => self.spend_limit = Some(limit),
+            }
+        }
+
+        if let Some(max_depth) =
+            depth_of(link, "maxDepth").map_err(|()| ChainError::DepthNotAnInteger { hop })?
+        {
+            match self.max_depth {
+                Some(effective) if max_depth > effective => {
+                    return Err(ChainError::DepthLimitWidening { hop })
+                }
+                _ => {
+                    if self.max_depth.is_none_or(|effective| max_depth < effective) {
+                        self.max_depth = Some(max_depth);
+                    }
+                }
+            }
+        }
+
+        let not_before =
+            text_of(link, "notBefore").map_err(|()| ChainError::MemberNotAString { hop })?;
+        if !not_before.is_empty() {
+            let parsed = parse_ms(not_before).ok_or(ChainError::NotBeforeUnparseable { hop })?;
+            if self.not_before.is_some_and(|effective| parsed < effective) {
+                return Err(ChainError::ActivationWidening { hop });
+            }
+            self.not_before = Some(parsed);
+        }
+        Ok(())
+    }
+
+    /// Which malformed member produced a stated_unit error.
+    fn member_error(&self, link: &Value, hop: usize) -> ChainError {
+        if text_of(link, "spendLimitUnit").is_err() {
+            ChainError::MemberNotAString { hop }
+        } else {
+            ChainError::SpendLimitNotANumber { hop }
+        }
+    }
+}
+
 /// Structural narrowing verification of a root-to-leaf chain, ported from
 /// the Go `VerifyDelegationChain`. Proves shape only: linkage, per-link
-/// scope and depth type validity, strict depth increment within the
-/// parent's `maxDepth`, scope coverage, spend limit and unit narrowing,
-/// and EXPIRY narrowing (a child may not outlive its parent, with
-/// unparseable expiries failing closed). Expiry narrowing is the only
-/// temporal rule here: `notBefore` containment across hops is NOT checked,
-/// so a child whose `notBefore` starts before its parent's passes this
-/// check, exactly as in the Go reference. It checks no signature, no
-/// trust, and no evaluation time; use [`verify_chain_authorization`] for
-/// an authorization decision.
+/// scope, depth, spend and string member type validity, strict depth
+/// increment within the effective `maxDepth`, scope coverage, spend limit and
+/// unit narrowing, activation-floor narrowing, and EXPIRY narrowing (a child
+/// may not outlive its parent, with unparseable expiries failing closed). It
+/// checks no signature, no trust, and no evaluation time; use
+/// [`verify_chain_authorization`] for an authorization decision.
+///
+/// Every optional bound is evaluated against the EFFECTIVE ceiling carried
+/// from the root (see [`EffectiveBound`]), not against the immediate parent
+/// alone. Under a pairwise reading, a three-hop chain that omits the bound in
+/// the middle hop laundered it back to unbounded: 100 -> absent -> 1,000,000
+/// passed both pairwise steps. Two hops cannot distinguish the two readings;
+/// three can.
+///
+/// Expiry stays a pairwise rule. Its omission under a bounded parent already
+/// fails closed, which makes pairwise containment transitively equal to the
+/// effective minimum.
 pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
     if chain.is_empty() {
         return Err(ChainError::EmptyChain);
@@ -375,21 +554,43 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
         if !link.is_object() {
             return Err(ChainError::NotAnObject { hop: index });
         }
-        // Scope element and depth types gate the whole chain up front,
-        // matching the Go reference where deserialization of ANY link
-        // (including a single-link chain with no pairwise step) fails
+        // Scope element, depth, spend and string member types gate the whole
+        // chain up front, matching the Go reference where deserialization of
+        // ANY link (including a single-link chain with no pairwise step) fails
         // before the verifier runs.
         scopes_of(link).map_err(|()| ChainError::ScopeElementNotAString { hop: index })?;
         depth_of(link, "currentDepth")
             .map_err(|()| ChainError::DepthNotAnInteger { hop: index })?;
         depth_of(link, "maxDepth").map_err(|()| ChainError::DepthNotAnInteger { hop: index })?;
+        spend_limit_of(link).map_err(|()| ChainError::SpendLimitNotANumber { hop: index })?;
+        for member in [
+            "delegatedBy",
+            "delegatedTo",
+            "spendLimitUnit",
+            "expiresAt",
+            "notBefore",
+        ] {
+            text_of(link, member).map_err(|()| ChainError::MemberNotAString { hop: index })?;
+        }
     }
+
+    // Seed the effective ceiling from the root. Whether the root's own
+    // currentDepth sits inside its own maxDepth is a per-link question, not a
+    // narrowing question: [`verify_delegation`] reports it as depth_exceeded,
+    // and the authorization path runs that on every hop.
+    let mut bound = EffectiveBound::default();
+    bound.narrow(&chain[0], 0)?;
+
     for hop in 1..chain.len() {
         let parent = &chain[hop - 1];
         let child = &chain[hop];
-        if str_field(child, "delegatedBy") != str_field(parent, "delegatedTo") {
+        if text_of(child, "delegatedBy").map_err(|()| ChainError::MemberNotAString { hop })?
+            != text_of(parent, "delegatedTo")
+                .map_err(|()| ChainError::MemberNotAString { hop: hop - 1 })?
+        {
             return Err(ChainError::BrokenLinkage { hop });
         }
+        bound.narrow(child, hop)?;
         let parent_depth = depth_of(parent, "currentDepth")
             .map_err(|()| ChainError::DepthNotAnInteger { hop: hop - 1 })?
             .unwrap_or(0);
@@ -403,12 +604,8 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
             // baseline rejection (recorded in the phase 0 matrix).
             _ => return Err(ChainError::DepthNotMonotonic { hop }),
         }
-        if let Some(max_depth) = depth_of(parent, "maxDepth")
-            .map_err(|()| ChainError::DepthNotAnInteger { hop: hop - 1 })?
-        {
-            if child_depth > max_depth {
-                return Err(ChainError::DepthLimitExceeded { hop });
-            }
+        if bound.max_depth.is_some_and(|max| child_depth > max) {
+            return Err(ChainError::DepthLimitExceeded { hop });
         }
         let parent_scope =
             scopes_of(parent).map_err(|()| ChainError::ScopeElementNotAString { hop: hop - 1 })?;
@@ -417,30 +614,17 @@ pub fn verify_chain_structure(chain: &[Value]) -> Result<(), ChainError> {
                 return Err(ChainError::ScopeWidening { hop });
             }
         }
-        let parent_limit = parent.get("spendLimit").and_then(Value::as_f64);
-        let child_limit = child.get("spendLimit").and_then(Value::as_f64);
-        if let (Some(parent_limit), Some(child_limit)) = (parent_limit, child_limit) {
-            if child_limit > parent_limit {
-                return Err(ChainError::SpendLimitWidening { hop });
-            }
-        }
-        let parent_unit = str_field(parent, "spendLimitUnit");
-        let child_unit = str_field(child, "spendLimitUnit");
-        if !parent_unit.is_empty() && child_limit.is_some() && child_unit != parent_unit {
-            return Err(ChainError::SpendUnitChanged { hop });
-        }
-        let parent_expiry = match parent.get("expiresAt").and_then(Value::as_str) {
-            Some(raw) if !raw.is_empty() => {
-                Some(parse_ms(raw).ok_or(ChainError::ExpiryUnparseable { hop: hop - 1 })?)
-            }
-            _ => None,
+        let parent_expiry = match text_of(parent, "expiresAt")
+            .map_err(|()| ChainError::MemberNotAString { hop: hop - 1 })?
+        {
+            "" => None,
+            raw => Some(parse_ms(raw).ok_or(ChainError::ExpiryUnparseable { hop: hop - 1 })?),
         };
-        let child_expiry = match child.get("expiresAt").and_then(Value::as_str) {
-            Some(raw) if !raw.is_empty() => {
-                Some(parse_ms(raw).ok_or(ChainError::ExpiryUnparseable { hop })?)
-            }
-            _ => None,
-        };
+        let child_expiry =
+            match text_of(child, "expiresAt").map_err(|()| ChainError::MemberNotAString { hop })? {
+                "" => None,
+                raw => Some(parse_ms(raw).ok_or(ChainError::ExpiryUnparseable { hop })?),
+            };
         if let Some(parent_expiry) = parent_expiry {
             match child_expiry {
                 None => return Err(ChainError::ExpiryWidening { hop }),
