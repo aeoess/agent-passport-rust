@@ -21,5 +21,25 @@ sha2 = "0.10"
 hex = "0.4"
 unicode-normalization = "0.1"
 time = { version = "0.3", features = ["parsing", "formatting"] }
-ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
+# SECURITY-LOAD-BEARING DEPENDENCY, PINNED TO A MINOR VERSION ON PURPOSE.
+#
+# RETRO-AUDIT R1. src/crypto.rs is the only file in this crate that touches
+# ed25519_dalek, and verify_ed25519 contains no APS-owned admissibility logic:
+# small-order rejection of the public key AND of R, canonical encoding, and
+# s < L are all properties of `VerifyingKey::verify_strict` in this crate.
+# Ed25519 admissibility here is a DEPENDENCY property, not a repository
+# property — which is why mutating the guard for the Phase-1 audit required
+# vendoring and [patch.crates-io]-substituting the crate. Go is insulated by
+# its own `admissiblePoint`; this crate is not.
+#
+# A caret requirement ("2.2") admits 2.3, 2.4, ... A release that relaxed or
+# restructured verify_strict's handling of R would arrive silently. The tilde
+# requirement admits patch releases only, so a minor bump is a deliberate edit
+# to this line, reviewed against what changed in verify_strict.
+#
+# tests/ed25519_admissibility.rs asserts that the R half is refused for R of
+# order 2, 4 and 8 under an admissible torsion-aliased key, and asserts those
+# vectors are LIVE. That is the test that has to catch a bump; this pin is what
+# makes the bump visible in the first place.
+ed25519-dalek = { version = "~2.2", default-features = false, features = ["std"] }
 thiserror = "2.0"

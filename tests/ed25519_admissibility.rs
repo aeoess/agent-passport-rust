@@ -342,3 +342,134 @@ fn delegation_with_small_order_signer_and_ordinary_r_is_refused() {
         status.errors
     );
 }
+
+// ── RETRO-AUDIT C2 / R1 ─────────────────────────────────────────────────────
+//
+// In this crate "the guard" is a third-party dependency. `verify_ed25519` is a
+// thin wrapper over `VerifyingKey::from_bytes` + `verify_strict`; small-order
+// rejection, canonicality and s < L are all properties of ed25519-dalek. Go is
+// insulated by its own `admissiblePoint`, this crate is not. Combine that with
+// the R conjunct having been pinned only at R = the identity encoding, and a
+// dalek release that relaxed verify_strict's handling of R would have passed
+// this suite unchanged.
+//
+// The vectors below are the ones a bump has to fail on: an ADMISSIBLE public
+// key A = A0 + T (A0 prime order, T of order 8, so A is not small order) with
+// an R of order 2, 4 and 8. `verify_strict` must refuse all three. Cargo.toml
+// pins the dalek MINOR version so that arriving at a version which does not is
+// a deliberate edit rather than a `cargo update`.
+//
+// LIVENESS IS ASSERTED, NOT ASSUMED. The permissive oracle here is dalek's own
+// non-strict `Verifier::verify`, which uses the cofactored equation and
+// therefore accepts a small-order R. A negative vector that the permissive
+// verifier also rejects pins nothing about verify_strict — 24 of the 32
+// existing small_order_R_honest_key vectors are vacuous in exactly that way,
+// and counting them instead of measuring them was RETRO-AUDIT C9.
+
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+/// The permissive oracle: dalek's non-strict verify. Accepts what verify_strict
+/// refuses on admissibility grounds, so `permissive && !strict` is exactly
+/// "this vector discriminates".
+fn permissive_verify(v: &Vector) -> bool {
+    let Ok(pk) = hex::decode(&v.public_key_hex) else {
+        return false;
+    };
+    let Ok(sig) = hex::decode(&v.signature_hex) else {
+        return false;
+    };
+    let Ok(pk): Result<[u8; 32], _> = pk.try_into() else {
+        return false;
+    };
+    let Ok(sig): Result<[u8; 64], _> = sig.try_into() else {
+        return false;
+    };
+    let Ok(key) = VerifyingKey::from_bytes(&pk) else {
+        return false;
+    };
+    key.verify(v.message_utf8.as_bytes(), &Signature::from_bytes(&sig))
+        .is_ok()
+}
+
+#[test]
+fn small_order_r_under_an_admissible_torsion_aliased_key_is_refused_and_live() {
+    let d = doc();
+    let group: Vec<&Vector> = d
+        .vectors
+        .iter()
+        .filter(|v| v.group == "small_order_R_torsion_alias_A")
+        .collect();
+    assert_eq!(
+        group.len(),
+        3,
+        "small_order_R_torsion_alias_A must carry R of order 2, 4 and 8"
+    );
+
+    const IDENTITY_R: &str = "0100000000000000000000000000000000000000000000000000000000000000";
+    let mut seen: Vec<&str> = Vec::new();
+    let mut live = 0;
+    for v in &group {
+        let r_half = &v.signature_hex[..64];
+        assert_ne!(
+            r_half, IDENTITY_R,
+            "{}: R is the identity encoding, the one class already pinned",
+            v.id
+        );
+        assert!(!seen.contains(&r_half), "{}: duplicate R half", v.id);
+        seen.push(r_half);
+
+        assert!(!v.expected_verification, "{}: must be a negative", v.id);
+        assert!(
+            !verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+            "{} accepted a small order R under an admissible key: {}",
+            v.id,
+            v.note
+        );
+        assert!(
+            permissive_verify(v),
+            "{}: VACUOUS. The permissive verifier rejects this vector too, so it pins nothing \
+             about verify_strict and would survive a dependency bump that dropped the R check.",
+            v.id
+        );
+        live += 1;
+    }
+    assert_eq!(live, 3, "all three R classes must be LIVE");
+}
+
+#[test]
+fn the_torsion_aliased_key_itself_is_admissible() {
+    // The positive control. Without it, a verifier that refused EVERY signature
+    // under a torsion-aliased key would pass the test above and the three
+    // negatives would isolate nothing.
+    let d = doc();
+    let control: Vec<&Vector> = d
+        .vectors
+        .iter()
+        .filter(|v| v.group == "torsion_alias_A_valid_R")
+        .collect();
+    assert_eq!(control.len(), 1);
+    let v = control[0];
+    assert!(v.expected_verification);
+    assert!(
+        permissive_verify(v),
+        "{}: the control does not verify permissively, so it controls nothing",
+        v.id
+    );
+    assert!(
+        verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+        "{}: verify_strict refused the control, so the refusals above are not attributable to R",
+        v.id
+    );
+
+    for n in d
+        .vectors
+        .iter()
+        .filter(|n| n.group == "small_order_R_torsion_alias_A")
+    {
+        assert_eq!(
+            n.public_key_hex, v.public_key_hex,
+            "{} uses a different key from the control; the R half is not isolated",
+            n.id
+        );
+    }
+}
