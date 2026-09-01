@@ -104,9 +104,17 @@ fn every_small_order_encoding_is_rejected() {
     let d = doc();
     let groups = ["small_order_pk", "small_order_pk_message_independence"];
     let mut n = 0;
-    for v in d.vectors.iter().filter(|v| groups.contains(&v.group.as_str())) {
+    for v in d
+        .vectors
+        .iter()
+        .filter(|v| groups.contains(&v.group.as_str()))
+    {
         assert!(
-            !verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+            !verify_ed25519(
+                v.message_utf8.as_bytes(),
+                &v.signature_hex,
+                &v.public_key_hex
+            ),
             "{} accepted a small order public key: {}",
             v.id,
             v.note
@@ -129,14 +137,21 @@ fn small_order_r_under_an_honest_key_is_rejected() {
         .filter(|v| v.group == "small_order_R_honest_key" && v.id.starts_with("smallR-honest-"))
     {
         assert!(
-            !verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+            !verify_ed25519(
+                v.message_utf8.as_bytes(),
+                &v.signature_hex,
+                &v.public_key_hex
+            ),
             "{} accepted a small order R: {}",
             v.id,
             v.note
         );
         n += 1;
     }
-    assert!(n >= 8, "expected the honest key small order R vectors, got {n}");
+    assert!(
+        n >= 8,
+        "expected the honest key small order R vectors, got {n}"
+    );
 }
 
 #[test]
@@ -145,7 +160,11 @@ fn ordinary_keys_and_signatures_are_unaffected() {
     let mut n = 0;
     for v in d.vectors.iter().filter(|v| v.group == "normal") {
         assert!(
-            verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+            verify_ed25519(
+                v.message_utf8.as_bytes(),
+                &v.signature_hex,
+                &v.public_key_hex
+            ),
             "{} is an ordinary valid signature and must still verify",
             v.id
         );
@@ -276,7 +295,11 @@ fn small_order_public_key_with_full_order_r_is_rejected() {
         .filter(|v| v.group == "small_order_A_full_order_R")
     {
         assert!(
-            !verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+            !verify_ed25519(
+                v.message_utf8.as_bytes(),
+                &v.signature_hex,
+                &v.public_key_hex
+            ),
             "{} accepted a small order public key carrying an ordinary R: {}",
             v.id,
             v.note
@@ -297,9 +320,7 @@ fn both_halves_of_the_check_are_independently_forced() {
     let r_only = d
         .vectors
         .iter()
-        .filter(|v| {
-            v.group == "small_order_R_honest_key" && v.id.starts_with("smallR-honest-")
-        })
+        .filter(|v| v.group == "small_order_R_honest_key" && v.id.starts_with("smallR-honest-"))
         .count();
     assert!(a_only > 0, "no vector isolates the public key half");
     assert!(r_only > 0, "no vector isolates the R half");
@@ -420,7 +441,11 @@ fn small_order_r_under_an_admissible_torsion_aliased_key_is_refused_and_live() {
 
         assert!(!v.expected_verification, "{}: must be a negative", v.id);
         assert!(
-            !verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+            !verify_ed25519(
+                v.message_utf8.as_bytes(),
+                &v.signature_hex,
+                &v.public_key_hex
+            ),
             "{} accepted a small order R under an admissible key: {}",
             v.id,
             v.note
@@ -456,7 +481,11 @@ fn the_torsion_aliased_key_itself_is_admissible() {
         v.id
     );
     assert!(
-        verify_ed25519(v.message_utf8.as_bytes(), &v.signature_hex, &v.public_key_hex),
+        verify_ed25519(
+            v.message_utf8.as_bytes(),
+            &v.signature_hex,
+            &v.public_key_hex
+        ),
         "{}: verify_strict refused the control, so the refusals above are not attributable to R",
         v.id
     );
