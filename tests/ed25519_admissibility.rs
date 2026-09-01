@@ -383,7 +383,7 @@ fn delegation_with_small_order_signer_and_ordinary_r_is_refused() {
 // LIVENESS IS ASSERTED, NOT ASSUMED. The permissive oracle here is dalek's own
 // non-strict `Verifier::verify`, which uses the cofactored equation and
 // therefore accepts a small-order R. A negative vector that the permissive
-// verifier also rejects pins nothing about verify_strict — 24 of the 32
+// verifier also rejects pins nothing about verify_strict: 24 of the 32
 // existing small_order_R_honest_key vectors are vacuous in exactly that way,
 // and counting them instead of measuring them was RETRO-AUDIT C9.
 
