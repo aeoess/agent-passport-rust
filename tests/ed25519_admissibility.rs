@@ -6,8 +6,9 @@
 //! `tests/vectors/ed25519-admissibility-v1.json` records the behaviour on which
 //! the two strict reference implementations agree: libsodium through PyNaCl and
 //! ed25519-dalek `verify_strict`. The same file is used by the TypeScript, Go
-//! and Python suites, so the four implementations answer every vector the same
-//! way by construction.
+//! and Python suites, so the four implementations are measured against one
+//! corpus. Sharing the corpus does not make them agree; these tests are what
+//! establish that they do.
 
 use agent_passport::crypto::verify_ed25519;
 
@@ -381,8 +382,9 @@ fn delegation_with_small_order_signer_and_ordinary_r_is_refused() {
 // a deliberate edit rather than a `cargo update`.
 //
 // LIVENESS IS ASSERTED, NOT ASSUMED. The permissive oracle here is dalek's own
-// non-strict `Verifier::verify`, which uses the cofactored equation and
-// therefore accepts a small-order R. A negative vector that the permissive
+// non-strict `Verifier::verify`, which recomputes R and compares encodings
+// without verify_strict's explicit small-order rejection of R and A, and so
+// accepts a small-order R. A negative vector that the permissive
 // verifier also rejects pins nothing about verify_strict: 24 of the 32
 // existing small_order_R_honest_key vectors are vacuous in exactly that way,
 // and counting them instead of measuring them was RETRO-AUDIT C9.
