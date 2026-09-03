@@ -104,7 +104,7 @@ the protocol.
 
 ## Status
 
-0.1.0. Verification only. The crate forbids unsafe code and denies missing
+0.2.0. Verification only. The crate forbids unsafe code and denies missing
 documentation.
 
 ## License
