@@ -27,6 +27,6 @@ If you discover a security vulnerability in the Agent Passport System Rust crate
 | Older versions | ❌ |
 
 The only earlier published release, 0.2.0 on crates.io, is unsupported; the
-advisory for 0.3.0, published at
+advisory for 0.3.0, GHSA-5p55-qp29-p3qc, published at
 https://github.com/aeoess/agent-passport-rust/security/advisories, describes the
 verification defects it carries.
