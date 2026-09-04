@@ -116,13 +116,16 @@ fn an_unreadable_expiry_is_invalid_not_ignored() {
 }
 
 #[test]
-fn an_absent_expiry_leaves_the_upper_edge_open() {
-    // Unchanged behaviour, pinned so a later edit cannot quietly reinterpret
-    // "no stated limit" as "a limit I could not read". These are different
-    // claims and only the second is a producer defect.
+fn an_absent_expiry_is_invalid_because_the_profile_requires_one() {
+    // `expiresAt: string` in the reference type, with no `?`. A passport that
+    // omits it has not stated a limit at all, so reporting nothing would make
+    // deleting the field the cheapest way to mint an eternal passport. Contrast
+    // `notBefore`, which the profile marks optional and which is still skipped
+    // when absent.
     let result = verify(&signed(vec![]));
-    assert!(result.valid, "{:?}", result.errors);
-    assert!(!result.errors.contains(&PassportError::InvalidExpiry));
+    assert!(!result.valid);
+    assert!(result.errors.contains(&PassportError::InvalidExpiry));
+    assert!(!result.errors.contains(&PassportError::Expired));
 }
 
 #[test]

@@ -26,9 +26,11 @@
 //! `expiresAt`/`notBefore` is an error of its own
 //! ([`PassportError::InvalidExpiry`], [`PassportError::InvalidNotBefore`]),
 //! never a skipped check: a limit this verifier cannot read is not a limit it
-//! can honour. Absence still leaves that edge of the window open. The
-//! reference draws the same line, and reports the unreadable case separately
-//! from the case where a limit was read and found to have passed.
+//! can honour. `expiresAt` is required by the profile, so an absent one is
+//! `InvalidExpiry` too; `notBefore` is optional, so an absent one leaves the
+//! lower edge of the window open. The reference draws both lines the same way,
+//! and reports the unreadable case separately from the case where a limit was
+//! read and found to have passed.
 
 use serde_json::{Map, Value};
 
@@ -308,19 +310,22 @@ pub fn verify_passport(
     // failure is reported under its own variant rather than as Expired, because
     // "the limit had passed" and "there was no readable limit" are different
     // findings and an operator acts on them differently.
-    match passport.get("expiresAt") {
-        // Absent leaves the upper edge of the window open. That is the shipped
-        // profile for this crate and is not what F-04 is about; it is pinned by
-        // test so the distinction from an unreadable value stays deliberate.
-        None => {}
-        Some(value) => match value.as_str().and_then(parse_ms) {
-            None => errors.push(PassportError::InvalidExpiry),
-            Some(expiry_ms) => {
-                if expiry_ms < expiry_floor {
-                    errors.push(PassportError::Expired);
-                }
+    // `expiresAt` is a required member of the profile (`expiresAt: string` in
+    // the reference type, no `?`), so an absent one is not an open-ended window,
+    // it is a passport that never stated a limit. Reporting nothing would make
+    // omitting the field the cheapest way to mint an eternal passport, which is
+    // the same defect as writing garbage into it by a shorter route.
+    match passport
+        .get("expiresAt")
+        .and_then(Value::as_str)
+        .and_then(parse_ms)
+    {
+        None => errors.push(PassportError::InvalidExpiry),
+        Some(expiry_ms) => {
+            if expiry_ms < expiry_floor {
+                errors.push(PassportError::Expired);
             }
-        },
+        }
     }
     // notBefore is optional: absent leaves the lower edge of the window open.
     // Present but unreadable is an error, for the same reason as above.
