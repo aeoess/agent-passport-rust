@@ -12,10 +12,19 @@
 //! collapsing to a known field set would silently change the preimage for
 //! any passport carrying extra members.
 //!
-//! Trust: with an empty `trusted_issuers` list the result is structural-only
-//! and carries [`PassportWarning::NoTrustedIssuers`], the same warning
-//! contract as the reference. Verification success and issuer-trust success
-//! are reported separately in the errors list, never merged into one bool.
+//! Trust: a signature over a passport says who signed it, not who vouches for
+//! it. The verifying key is the one the passport carries, so a good signature
+//! is available to anyone who can generate a key pair. An empty
+//! `trusted_issuers` list therefore establishes integrity and NOT authority,
+//! and is an error unless the caller sets `allow_self_signed`, which is the
+//! deliberate opt-in and carries [`PassportWarning::NoTrustedIssuers`] to say
+//! no trust root was consulted. Verification success and issuer-trust success
+//! are reported separately, never merged into one bool: the result carries
+//! `issuer_trust_checked` and `self_signed_accepted` alongside `valid`.
+//!
+//! This is the contract the reference now applies too. The comment here used
+//! to claim the same WARNING contract as the reference; the reference changed,
+//! and an empty list is no longer an admission in any of the four SDKs.
 //!
 //! Time: no wall clock. [`verify_passport`] takes an explicit RFC 3339
 //! evaluation time and applies the reference's explicit-clock boundary
@@ -82,6 +91,12 @@ pub enum PassportError {
     /// `publicKey` is missing or empty.
     #[error("missing publicKey")]
     MissingPublicKey,
+    /// No trusted issuers were supplied and the caller did not opt in to
+    /// self-signed acceptance, so nothing established who vouches for this
+    /// passport. Distinct from every error above: those report something the
+    /// verifier read and found wrong, this reports a question nobody asked.
+    #[error("authority not established: supply trusted_issuers, or set allow_self_signed")]
+    AuthorityNotEstablished,
 }
 
 /// A non-fatal observation. Matches the reference warning contract.
@@ -107,9 +122,11 @@ pub enum PassportWarning {
 }
 
 /// Outcome of [`verify_passport`]. `valid` is true exactly when `errors` is
-/// empty; warnings never affect it. When no trusted issuers were supplied
-/// the result is structural-only, marked by
-/// [`PassportWarning::NoTrustedIssuers`].
+/// empty; warnings never affect it. With no trusted issuers and no opt-in the
+/// result is not valid and carries
+/// [`PassportError::AuthorityNotEstablished`]; with the opt-in it is valid,
+/// `self_signed_accepted` is set, and [`PassportWarning::NoTrustedIssuers`]
+/// records that no trust root was consulted.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassportVerification {
     /// True when no error was recorded.
@@ -118,14 +135,29 @@ pub struct PassportVerification {
     pub errors: Vec<PassportError>,
     /// Non-fatal observations, including the structural-only marker.
     pub warnings: Vec<PassportWarning>,
+    /// Whether an issuer-trust check ran at all, that is, whether a non-empty
+    /// `trusted_issuers` list was supplied.
+    pub issuer_trust_checked: bool,
+    /// Whether this verdict was reached with no trust root consulted, which
+    /// happens only when the caller set `allow_self_signed`. A caller that
+    /// must not act on a self-vouching passport branches on this rather than
+    /// on the presence of a warning.
+    pub self_signed_accepted: bool,
 }
 
 /// Inputs for [`verify_passport`].
 #[derive(Debug, Clone)]
 pub struct PassportVerifyOptions<'a> {
     /// Issuer public keys (hex) whose countersignature makes a passport
-    /// authority-issued. Empty means structural-only verification.
+    /// authority-issued. An empty list holds no anchors; it does not mean
+    /// "trust anyone", and on its own it is not an admission.
     pub trusted_issuers: &'a [String],
+    /// Accept a passport carrying no trusted countersignature, on its own
+    /// signature alone. False is the safe default and the one to keep unless
+    /// the calling path is explicitly integrity-only. Consulted only when
+    /// `trusted_issuers` is empty: a caller that named issuers asked for that
+    /// check, and this flag does not rescue a failed one.
+    pub allow_self_signed: bool,
     /// RFC 3339 evaluation time. There is no wall-clock fallback.
     pub evaluation_time: &'a str,
     /// Uniform clock skew in milliseconds, applied exactly as the
@@ -243,6 +275,8 @@ pub fn verify_passport(
             valid: false,
             errors: vec![PassportError::MissingPassportOrSignature],
             warnings,
+            issuer_trust_checked: false,
+            self_signed_accepted: false,
         });
     };
     let passport = envelope.get("passport");
@@ -252,6 +286,8 @@ pub fn verify_passport(
             valid: false,
             errors: vec![PassportError::MissingPassportOrSignature],
             warnings,
+            issuer_trust_checked: false,
+            self_signed_accepted: false,
         });
     };
     if passport.is_null() || signature.is_empty() {
@@ -259,6 +295,8 @@ pub fn verify_passport(
             valid: false,
             errors: vec![PassportError::MissingPassportOrSignature],
             warnings,
+            issuer_trust_checked: false,
+            self_signed_accepted: false,
         });
     }
 
@@ -274,8 +312,18 @@ pub fn verify_passport(
         errors.push(PassportError::InvalidSignature);
     }
 
-    if options.trusted_issuers.is_empty() {
-        warnings.push(PassportWarning::NoTrustedIssuers);
+    let issuer_trust_checked = !options.trusted_issuers.is_empty();
+    let mut self_signed_accepted = false;
+    if !issuer_trust_checked {
+        if options.allow_self_signed {
+            self_signed_accepted = true;
+            warnings.push(PassportWarning::NoTrustedIssuers);
+        } else {
+            // Integrity is established above and reported above. Authority is
+            // the caller's to supply, and without it there is nothing here to
+            // be valid about.
+            errors.push(PassportError::AuthorityNotEstablished);
+        }
     } else {
         let issuer = envelope.get("issuerSignature").and_then(Value::as_object);
         let issuer_signature = issuer.and_then(|i| i.get("signature").and_then(Value::as_str));
@@ -392,9 +440,13 @@ pub fn verify_passport(
         }
     }
 
+    let valid = errors.is_empty();
     Ok(PassportVerification {
-        valid: errors.is_empty(),
+        valid,
         errors,
         warnings,
+        issuer_trust_checked,
+        // True only when the caller opted in AND the verdict held.
+        self_signed_accepted: self_signed_accepted && valid,
     })
 }

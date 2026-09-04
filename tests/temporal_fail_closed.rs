@@ -77,6 +77,8 @@ fn verify(signed: &Value) -> agent_passport::passport::PassportVerification {
         signed,
         &PassportVerifyOptions {
             trusted_issuers: &none,
+            // Integrity-only path: these assert timestamp handling, not authority.
+            allow_self_signed: true,
             evaluation_time: NOW,
             allowed_clock_skew_ms: 0,
         },
