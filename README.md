@@ -8,7 +8,7 @@ no signing, no issuance, no revocation store.
 
 ```toml
 [dependencies]
-agent-passport-system = "0.1"
+agent-passport-system = "0.3"
 ```
 
 ```rust
@@ -51,6 +51,8 @@ language.
 ## What it does not do, and what a pass does not prove
 
 Read this section before relying on a result.
+
+[The verification boundary](https://github.com/aeoess/agent-passport-rust/blob/main/docs/verification-boundary.md) draws the authority-against-integrity line, names the surface this release classified, and records that the rest were not classified.
 
 **A structural pass is not an authorization.** `verify_chain_structure` returns
 the unit type. `verify_chain_authorization` returns a `ChainAuthorization`
@@ -108,7 +110,7 @@ the protocol.
 
 ## Status
 
-0.1.0. Verification only. The crate forbids unsafe code and denies missing
+0.3.0. Verification only. The crate forbids unsafe code and denies missing
 documentation.
 
 ## License
