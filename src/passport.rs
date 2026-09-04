@@ -22,9 +22,13 @@
 //! semantics: expired only when `expires_at` is strictly earlier than the
 //! evaluation time minus the allowed skew, and not yet valid only when
 //! `not_before` is strictly later than the evaluation time plus the skew.
-//! Equality on either boundary is live. An unparseable or absent
-//! `expiresAt`/`notBefore` skips that check, which is the reference behavior
-//! and is deliberately preserved rather than silently hardened.
+//! Equality on either boundary is live. A present but unreadable
+//! `expiresAt`/`notBefore` is an error of its own
+//! ([`PassportError::InvalidExpiry`], [`PassportError::InvalidNotBefore`]),
+//! never a skipped check: a limit this verifier cannot read is not a limit it
+//! can honour. Absence still leaves that edge of the window open. The
+//! reference draws the same line, and reports the unreadable case separately
+//! from the case where a limit was read and found to have passed.
 
 use serde_json::{Map, Value};
 
@@ -54,9 +58,22 @@ pub enum PassportError {
     /// `expires_at` is earlier than the evaluation time (minus skew).
     #[error("passport expired")]
     Expired,
+    /// `expires_at` is present but is not a string, or is a string that is not
+    /// an RFC 3339 instant. Distinct from [`PassportError::Expired`]: that one
+    /// reports a limit this verifier read and found to have passed, this one
+    /// reports that it never read a limit at all. An expiry a verifier cannot
+    /// read is not an expiry it can honour.
+    #[error("invalid expiresAt")]
+    InvalidExpiry,
     /// `not_before` is later than the evaluation time (plus skew).
     #[error("passport not yet valid")]
     NotYetValid,
+    /// `not_before` is present but is not a string, or is a string that is not
+    /// an RFC 3339 instant. Distinct from [`PassportError::NotYetValid`]: the
+    /// verifier has seen no evidence that the window has opened, which is a
+    /// different claim from having seen a start date still in the future.
+    #[error("invalid notBefore")]
+    InvalidNotBefore,
     /// `agentId` is missing or empty.
     #[error("missing agentId")]
     MissingAgentId,
@@ -77,6 +94,12 @@ pub enum PassportWarning {
     NoCapabilities,
     /// An embedded delegation expired before the evaluation time.
     DelegationExpired,
+    /// An embedded delegation carries an `expiresAt` that is not a string, or
+    /// is a string that is not an RFC 3339 instant. Reported separately from
+    /// [`PassportWarning::DelegationExpired`] so an operator can tell a
+    /// delegation whose limit has passed from one whose limit could not be
+    /// read; the second usually means a broken producer, not a stale grant.
+    DelegationInvalidExpiry,
     /// An embedded delegation has spent its full spend limit.
     DelegationSpendExhausted,
 }
@@ -277,25 +300,40 @@ pub fn verify_passport(
         }
     }
 
-    // Temporal boundaries, explicit-clock semantics. Unparseable or absent
-    // timestamps skip the check, exactly as the reference skips a NaN parse.
-    if let Some(expiry_ms) = passport
-        .get("expiresAt")
-        .and_then(Value::as_str)
-        .and_then(parse_ms)
-    {
-        if expiry_ms < expiry_floor {
-            errors.push(PassportError::Expired);
-        }
+    // Temporal boundaries, explicit-clock semantics. A timestamp that is
+    // present but unreadable fails closed, in the same shape `verify_delegation`
+    // already uses: an expiry this verifier cannot read is not an expiry it can
+    // honour, and skipping the comparison would make writing garbage into the
+    // field strictly better for the holder than writing an honest date. The
+    // failure is reported under its own variant rather than as Expired, because
+    // "the limit had passed" and "there was no readable limit" are different
+    // findings and an operator acts on them differently.
+    match passport.get("expiresAt") {
+        // Absent leaves the upper edge of the window open. That is the shipped
+        // profile for this crate and is not what F-04 is about; it is pinned by
+        // test so the distinction from an unreadable value stays deliberate.
+        None => {}
+        Some(value) => match value.as_str().and_then(parse_ms) {
+            None => errors.push(PassportError::InvalidExpiry),
+            Some(expiry_ms) => {
+                if expiry_ms < expiry_floor {
+                    errors.push(PassportError::Expired);
+                }
+            }
+        },
     }
-    if let Some(nbf_ms) = passport
-        .get("notBefore")
-        .and_then(Value::as_str)
-        .and_then(parse_ms)
-    {
-        if nbf_ms > not_before_ceiling {
-            errors.push(PassportError::NotYetValid);
-        }
+    // notBefore is optional: absent leaves the lower edge of the window open.
+    // Present but unreadable is an error, for the same reason as above.
+    match passport.get("notBefore") {
+        None => {}
+        Some(value) => match value.as_str().and_then(parse_ms) {
+            None => errors.push(PassportError::InvalidNotBefore),
+            Some(nbf_ms) => {
+                if nbf_ms > not_before_ceiling {
+                    errors.push(PassportError::NotYetValid);
+                }
+            }
+        },
     }
 
     if passport
@@ -328,14 +366,16 @@ pub fn verify_passport(
     // zero spend limit or zero spent amount never triggers the warning.
     if let Some(delegations) = passport.get("delegations").and_then(Value::as_array) {
         for delegation in delegations {
-            if let Some(expiry_ms) = delegation
-                .get("expiresAt")
-                .and_then(Value::as_str)
-                .and_then(parse_ms)
-            {
-                if expiry_ms < now_ms {
-                    warnings.push(PassportWarning::DelegationExpired);
-                }
+            match delegation.get("expiresAt") {
+                None => {}
+                Some(value) => match value.as_str().and_then(parse_ms) {
+                    None => warnings.push(PassportWarning::DelegationInvalidExpiry),
+                    Some(expiry_ms) => {
+                        if expiry_ms < now_ms {
+                            warnings.push(PassportWarning::DelegationExpired);
+                        }
+                    }
+                },
             }
             let limit = delegation.get("spendLimit").and_then(Value::as_f64);
             let spent = delegation.get("spentAmount").and_then(Value::as_f64);

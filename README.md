@@ -79,10 +79,14 @@ report the signature valid. This crate does not reject that key class, because
 doing so unilaterally would diverge from the references. A committed test pins
 the behavior.
 
-**Unparseable timestamps fail open in the reference and here.** A non-parsing
-`expiresAt` or `notBefore` on a passport skips the check rather than failing it.
-This is ported faithfully from the TypeScript reference and flagged rather than
-corrected, because changing it is a reference decision.
+**An unreadable timestamp fails closed.** A present but non-parsing `expiresAt`
+or `notBefore` on a passport is an error of its own, `InvalidExpiry` or
+`InvalidNotBefore`, not a skipped check: a limit the verifier cannot read is not
+a limit it can honour, and skipping the comparison made writing garbage into the
+field better for the holder than writing an honest date. The unreadable case is
+reported separately from `Expired` and `NotYetValid`, which claim a limit was
+read and found to have passed. Absence still leaves that edge of the window
+open. The reference draws the same line.
 
 **No verifier reads the wall clock.** Time-aware verification takes an explicit
 evaluation time. No verifier trusts a self-minted root; authorization takes
