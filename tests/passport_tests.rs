@@ -90,6 +90,11 @@ fn signed_fixture() -> Value {
 fn options<'a>(trusted: &'a [String]) -> PassportVerifyOptions<'a> {
     PassportVerifyOptions {
         trusted_issuers: trusted,
+        // A test that supplies no issuers is asserting signature, expiry and
+        // structure, which is integrity; one that supplies issuers is
+        // asserting the trust path. Naming the opt-in exactly when the list is
+        // empty keeps each test asserting what it always asserted.
+        allow_self_signed: trusted.is_empty(),
         evaluation_time: FIXED_VERIFY_NOW,
         allowed_clock_skew_ms: 0,
     }
@@ -193,6 +198,8 @@ fn temporal_boundaries_pin_equality() {
             &signed,
             &PassportVerifyOptions {
                 trusted_issuers: &none,
+                // Integrity-only path: no issuer is being trusted here.
+                allow_self_signed: true,
                 evaluation_time: when,
                 allowed_clock_skew_ms: 0,
             },
@@ -210,6 +217,8 @@ fn temporal_boundaries_pin_equality() {
         &signed,
         &PassportVerifyOptions {
             trusted_issuers: &none,
+            // Integrity-only path: no issuer is being trusted here.
+            allow_self_signed: true,
             evaluation_time: "2027-06-03T12:00:01Z",
             allowed_clock_skew_ms: 2_000,
         },
@@ -228,6 +237,8 @@ fn temporal_boundaries_pin_equality() {
         &gated,
         &PassportVerifyOptions {
             trusted_issuers: &none,
+            // Integrity-only path: no issuer is being trusted here.
+            allow_self_signed: true,
             evaluation_time: "2026-06-03T12:59:59Z",
             allowed_clock_skew_ms: 0,
         },
@@ -241,6 +252,8 @@ fn temporal_boundaries_pin_equality() {
             &signed,
             &PassportVerifyOptions {
                 trusted_issuers: &none,
+                // Integrity-only path: no issuer is being trusted here.
+                allow_self_signed: true,
                 evaluation_time: "not-a-time",
                 allowed_clock_skew_ms: 0,
             },
@@ -260,6 +273,8 @@ fn skew_domain_and_arithmetic_boundaries() {
             &signed,
             &PassportVerifyOptions {
                 trusted_issuers: &none,
+                // Integrity-only path: no issuer is being trusted here.
+                allow_self_signed: true,
                 evaluation_time: when,
                 allowed_clock_skew_ms: skew,
             },

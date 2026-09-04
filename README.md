@@ -8,7 +8,7 @@ no signing, no issuance, no revocation store.
 
 ```toml
 [dependencies]
-agent-passport-system = "0.1"
+agent-passport-system = "0.3"
 ```
 
 ```rust
@@ -52,6 +52,8 @@ language.
 
 Read this section before relying on a result.
 
+[The verification boundary](https://github.com/aeoess/agent-passport-rust/blob/main/docs/verification-boundary.md) draws the authority-against-integrity line, names the surface this release classified, and records that the rest were not classified.
+
 **A structural pass is not an authorization.** `verify_chain_structure` returns
 the unit type. `verify_chain_authorization` returns a `ChainAuthorization`
 value. They are deliberately different types so a structural result cannot be
@@ -79,10 +81,14 @@ report the signature valid. This crate does not reject that key class, because
 doing so unilaterally would diverge from the references. A committed test pins
 the behavior.
 
-**Unparseable timestamps fail open in the reference and here.** A non-parsing
-`expiresAt` or `notBefore` on a passport skips the check rather than failing it.
-This is ported faithfully from the TypeScript reference and flagged rather than
-corrected, because changing it is a reference decision.
+**An unreadable timestamp fails closed.** A present but non-parsing `expiresAt`
+or `notBefore` on a passport is an error of its own, `InvalidExpiry` or
+`InvalidNotBefore`, not a skipped check: a limit the verifier cannot read is not
+a limit it can honour, and skipping the comparison made writing garbage into the
+field better for the holder than writing an honest date. The unreadable case is
+reported separately from `Expired` and `NotYetValid`, which claim a limit was
+read and found to have passed. Absence still leaves that edge of the window
+open. The reference draws the same line.
 
 **No verifier reads the wall clock.** Time-aware verification takes an explicit
 evaluation time. No verifier trusts a self-minted root; authorization takes
@@ -104,7 +110,7 @@ the protocol.
 
 ## Status
 
-0.2.0. Verification only. The crate forbids unsafe code and denies missing
+0.3.0. Verification only. The crate forbids unsafe code and denies missing
 documentation.
 
 ## License
